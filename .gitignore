@@ -1,5 +1,37 @@
+# Build.
 OBJ.*/
+build.log
+*.o
+
+# GRASS documentation build.
 *.tmp.html
 *.tmp.md
+
+# Python and tests.
 __pycache__/
 .pytest_cache/
+*.pyc
+venv*/
+.venv/
+
+# Model weights: read from ~/models/<name>, never committed (their
+# licences forbid or restrict redistribution).
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.onnx
+*.bin
+weights/
+
+# Debug dumps (I_COREGISTRATION_OPENCL_DUMP) and evaluation output.
+dump/
+*.f32
+tests/eval/output/
+
+# Editors and system.
+*~
+*.swp
+.vscode/
+.idea/
+.DS_Store
