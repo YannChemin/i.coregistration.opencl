@@ -504,7 +504,7 @@ int main(int argc, char *argv[])
                               &dist);
             nraw += nm;
             if (dump) {
-                char info[128];
+                char info[GPATH_MAX];
                 FILE *fp;
 
                 dump_tile(dump, t, "src_input.f32", img1,

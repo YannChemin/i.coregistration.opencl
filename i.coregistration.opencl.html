@@ -1,0 +1,172 @@
+<h2>DESCRIPTION</h2>
+<p><em>i.coregistration.opencl</em> finds control points between an imagery group
+and a reference imagery group, and writes them as the group's control
+points for <em>i.rectify</em> (or <em>v.rectify</em>). Keypoints and descriptors are
+extracted with DISK, a learnt local feature, on an OpenCL device (GPU or
+CPU), with weights read directly from the published PyTorch checkpoint;
+they are matched by nearest neighbour and the matches filtered with
+AdaLAM, which keeps those that agree with a local affine transformation
+around confident seed matches. Neither Python nor PyTorch is needed at
+run time.</p>
+<p>The module is a translation to C and OpenCL of the RS_coreg_LoFTR
+workflow (DISK features, AdaLAM matching, control points, thin plate
+spline warp with <em>gdalwarp</em>), made for images that are already roughly
+georeferenced in the same project: aerial and satellite basemaps of
+different dates, a hyperspectral scene and a very high resolution
+reference, and so on.</p>
+<p>The <b>group</b> (the image to co-register) and the <b>reference</b> (or their
+<b>subgroup</b> and <b>reference_subgroup</b>) must each contain exactly three
+raster maps, used as red, green and blue in group order (see <em>i.group</em>).
+Both are read over the current computational region, on its grid: set
+the region to the reference (for instance <code>g.region raster=...</code>) and make
+sure that the image to co-register covers it. Bands within 0..255 are
+used as they are (as the repository reads its 8-bit images); others, or
+all bands with <b>percentile</b>, are stretched linearly to 0..255. Cells
+that are NULL in any band yield no keypoint.</p>
+<h3>Tiles</h3>
+<p>DISK runs on tiles of <b>tile_size</b> cells (1024 by default), with an
+overlap of <b>tile_overlap</b> cells, taken at the same place in both
+images: since the images are already roughly aligned, each tile of the
+image is matched against the same tile of the reference only. This keeps
+the matches local, lets images of any size be processed in the memory of
+one tile, and spreads the control points over the whole region. Each
+tile yields up to <b>features</b> keypoints per image (2048, as the
+repository).</p>
+<h3>DISK</h3>
+<p>DISK (Tyszkiewicz et al., 2020) is a U-Net of 5x5 convolutions with
+instance normalization and PReLU gates, whose output holds a 128-value
+descriptor and a detection score for every cell. Keypoints are the cells
+that are strict maxima of the score over 5x5 windows and positive, the
+<b>features</b> highest of them; their descriptors are normalized to unit
+length. This is the inference procedure of <em>kornia.feature.DISK</em>, and on
+the same tile the keypoints, scores and descriptors agree with it to
+single precision (see <code>tests/reference_compare.py</code>).</p>
+<p>The <b>checkpoint</b> is one of the two published DISK models (4.2 MiB
+each), chosen with <b>model</b>:</p>
+<ul>
+<li><code>depth</code> (<a href="https://raw.githubusercontent.com/cvlab-epfl/disk/master/depth-save.pth">depth-save.pth</a>,
+default, as the repository): trained with depth supervision, more
+precise;</li>
+<li><code>epipolar</code> (<a href="https://raw.githubusercontent.com/cvlab-epfl/disk/master/epipolar-save.pth">epipolar-save.pth</a>):
+trained with epipolar supervision, with keypoints on everything that
+can be matched, thin structures and object edges included.</li>
+</ul>
+<p>Without <b>checkpoint</b>, the model is looked for in <b>weights_dir</b> (by
+default <code>$DISK_MODELS_DIR</code>, or <code>~/models/disk</code>) and downloaded there when
+missing, unless the <b>-o</b> flag is given. Both the current PyTorch zip
+format and the legacy format these files use are read.</p>
+<h3>Matching and AdaLAM</h3>
+<p>Each keypoint of the image is matched to the nearest descriptor of the
+reference, scored by the ratio of the squared distances to the nearest
+and second nearest. AdaLAM (Cavalli et al., 2020) then picks seed
+matches, the best-scored ones (ratio below 0.8 squared) within circles
+whose area is the tile's keypoint extent divided by <b>area_ratio</b>,
+gathers around each seed the matches lying within <b>search_expansion</b>
+times that radius in both images, and fits a local affine transformation
+to each neighbourhood with a confidence-based RANSAC of
+<b>ransac_iters</b> hypotheses followed by a least-squares refit. Matches
+of neighbourhoods with a confidence of at least <b>min_confidence</b> and
+at least <b>min_inliers</b> inliers are kept. With <b>-m</b>, seeds are taken
+among mutual nearest neighbours only. The defaults are those of the
+repository (<em>kornia</em>'s with a search expansion of 16, 256 hypotheses and
+no mutual nearest neighbour constraint), and the procedure follows
+<em>kornia.feature.match_adalam</em> step by step: on the same keypoints, both
+return the same matches. DISK keypoints have no orientation or scale, so
+AdaLAM's orientation and scale agreement tests do not apply.</p>
+<h3>Filters and refinement</h3>
+<p>Images of different dates show objects that moved: a vehicle, an
+aircraft or a ship gives matches that agree with each other but not with
+the ground. <b>max_shift</b> drops matches whose shift exceeds that
+distance (in map units), and <b>tolerance</b> those whose shift differs
+from the median shift of their tile by more than that along either axis.</p>
+<p>DISK keypoints lie on cell centres, so control points are only as
+precise as one cell. With <b>-s</b>, each match is refined in the reference
+to a fraction of a cell: the 15x15-cell grey window of the image around
+the keypoint is correlated (normalized cross-correlation) with reference
+windows shifted by up to two cells, and the peak is fitted by a parabola
+along each axis. Matches whose peak lies on the edge of the search area,
+or whose windows are flat or meet NULL cells, keep their whole-cell
+position.</p>
+<p>Matches sharing a reference cell (found in two overlapping tiles, or by
+two keypoints) are merged into one control point, at the mean of their
+positions, as the repository does.</p>
+<h3>Output</h3>
+<p>The control points are written to the group's POINTS file, source
+east/north (the cell's position in the group's current georeferencing)
+and reference east/north, all active, and the current project and mapset
+become the group's target: <em>i.rectify</em> with <b>-t</b> (thin plate spline,
+the repository's <code>gdalwarp -tps</code>) or a polynomial <b>order</b> then warps
+the group onto the reference, and <em>v.rectify</em> moves vector maps drawn on
+the image. With <b>-n</b>, the group is left as it is.</p>
+<p>The <b>points</b> vector map holds the control points at their reference
+positions, with the attribute columns:</p>
+<ul>
+<li><code>src_east</code>, <code>src_north</code>: position in the image;</li>
+<li><code>ref_east</code>, <code>ref_north</code>: position in the reference;</li>
+<li><code>dx</code>, <code>dy</code>, <code>shift</code>: shift from the image to the reference, in map
+units;</li>
+<li><code>dist</code>: AdaLAM inverse confidence of the neighbourhood (lower is
+better);</li>
+<li><code>tile</code>: tile of the match;</li>
+<li><code>refined</code>: 1 when refined to a fraction of a cell (<b>-s</b>);</li>
+<li><code>matches</code>: matches merged into the point.</li>
+</ul>
+<p>The module reports the number of matches, those dropped by each filter,
+and the median shift with its median absolute deviation.</p>
+<h2>NOTES</h2>
+<h3>OpenCL device</h3>
+<p><b>device</b> selects the first GPU (<code>gpu</code>), the first CPU device (<code>cpu</code>),
+or the first GPU and else the first CPU (<code>auto</code>); <b>platform</b> restricts
+the search to platforms whose name contains the given text. A GPU is
+strongly recommended. With Mesa's rusticl, set <code>RUSTICL_ENABLE</code> to the
+driver, e.g. <code>RUSTICL_ENABLE=radeonsi</code>.</p>
+<h3>Performance</h3>
+<p>DISK takes about 300 billion multiply-adds per million cells and per
+image. On one 1024 x 1024 tile, a laptop CPU (PoCL, 4 cores) took about
+four minutes for both images. The memory needed on the device grows with
+the tile area: about 1.2 GiB for 1024-cell tiles.</p>
+<h3>Debugging aids</h3>
+<p>With the environment variable <code>I_COREGISTRATION_OPENCL_DUMP</code> set to a
+folder, each tile's DISK inputs, keypoints with their scores and
+descriptors, and AdaLAM matches are written there;
+<code>tests/reference_compare.py</code> compares them with <em>kornia</em> in a Python
+environment with PyTorch.</p>
+<h2>EXAMPLES</h2>
+<h3>Two basemaps of different dates</h3>
+<p>Co-register a Google basemap to an ESRI one, dropping matches on
+aircraft that moved between the two dates (more than 5 m, or 2 m away
+from their tile's median), with sub-cell refinement, then warp it:</p>
+<div class="code"><pre>i.group group=esri input=esri.1,esri.2,esri.3
+i.group group=google input=google.1,google.2,google.3
+g.region raster=esri.1 -p
+i.coregistration.opencl group=google reference=esri points=gcp_google \
+    -s max_shift=5 tolerance=2
+i.rectify -t group=google extension=_coreg method=linear -c</pre></div>
+<h3>Hyperspectral scene to a very high resolution reference</h3>
+<p>Match a hyperspectral scene (three bands near red, green and blue)
+against a WorldView-3 pansharpened RGB image, on the reference grid, and
+look at the control points before warping:</p>
+<div class="code"><pre>i.group group=hymap_rgb input=hymap.28,hymap.17,hymap.8
+i.group group=wv3_rgb input=wv3.5,wv3.3,wv3.2
+g.region raster=wv3.5 -p
+i.coregistration.opencl group=hymap_rgb reference=wv3_rgb \
+    points=gcp_hymap -n
+v.db.univar map=gcp_hymap column=shift</pre></div>
+<h2>REFERENCES</h2>
+<p>Cavalli, L., Larsson, V., Oswald, M. R., Sattler, T., Pollefeys, M.,
+2020. Handcrafted outlier detection revisited. In: Computer Vision -
+ECCV 2020, Lecture Notes in Computer Science 12364, Springer, 770-787.
+<a href="https://doi.org/10.1007/978-3-030-58529-7_45">doi:10.1007/978-3-030-58529-7_45</a></p>
+<p>Riba, E., Mishkin, D., Ponsa, D., Rublee, E., Bradski, G., 2020.
+Kornia: an open source differentiable computer vision library for
+PyTorch. In: Proceedings of the IEEE/CVF Winter Conference on
+Applications of Computer Vision (WACV), 3674-3683.</p>
+<p>Tyszkiewicz, M. J., Fua, P., Trulls, E., 2020. DISK: learning local
+features with policy gradient. In: Advances in Neural Information
+Processing Systems 33 (NeurIPS 2020), 14254-14265.</p>
+<h2>SEE ALSO</h2>
+<p><em><a href="i.group.html">i.group</a>, <a href="i.ortho.photo.html">i.ortho.photo</a>,
+<a href="i.rectify.html">i.rectify</a>, <a href="m.transform.html">m.transform</a>,
+<a href="v.rectify.html">v.rectify</a></em></p>
+<h2>AUTHORS</h2>
+<p>Yann Chemin</p>
