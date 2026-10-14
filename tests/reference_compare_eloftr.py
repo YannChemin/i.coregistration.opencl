@@ -8,12 +8,15 @@ repository's venv_ref):
     python -I reference_compare_eloftr.py <dir> <weights folder> [tile]
 
 The weights folder holds config.json and model.safetensors of
-zju-community/efficientloftr. For the tile (default 1), on the very grey
+zju-community/efficientloftr or zju-community/matchanything_eloftr. For
+the tile (default 1), on the very grey
 images the module used, stage by stage against
 EfficientLoFTRForKeypointMatching:
 
 - backbone: the 1/8 RepVGG features of both images;
-- coarse: the transformer output;
+- coarse: the transformer output, with the RoPE positions scaled as the
+  module did (pos_scale in the dump: the authors' "npe", which
+  Transformers lacks);
 - coarse matches: mutual maxima of the dual softmax above the threshold,
   away from the border, as the authors' CoarseMatching (pairs (i, j));
   compared as sets, with their confidences;
@@ -55,6 +58,23 @@ def report(name, a, b):
 
 def load(path, shape):
     return np.fromfile(path, dtype=np.float32).reshape(shape)
+
+
+def rope(inv_freq, cfg, h, w, scale):
+    """Transformers' rotary embedding with positions times scale (1:
+    Transformers' own; 832 / long side: the authors' npe)."""
+    k, s = cfg.q_aggregation_kernel_size, cfg.q_aggregation_stride
+    eh, ew = (h - k) // s + 1, (w - k) // s + 1
+    i = torch.arange(1, eh + 1, dtype=torch.float32)[:, None, None] * scale
+    j = torch.arange(1, ew + 1, dtype=torch.float32)[None, :, None] * scale
+    f = inv_freq.reshape(-1)
+    emb = torch.zeros(1, eh, ew, D // 2)
+    emb[..., 0::2] = i * f
+    emb[..., 1::2] = j * f
+    return (
+        emb.cos().repeat_interleave(2, dim=-1),
+        emb.sin().repeat_interleave(2, dim=-1),
+    )
 
 
 def coarse_pairs(model, feats):
@@ -128,8 +148,9 @@ def main():
     t = int(sys.argv[3]) if len(sys.argv) > 3 else 1
     lines = (dump / f"tile{t:03d}_eloftr_matches.txt").read_text().splitlines()
     head = lines[0].split()
-    info = dict(zip(head[1::2], map(int, head[2::2])))
-    H, W = info["H"], info["W"]
+    info = dict(zip(head[1::2], map(float, head[2::2])))
+    H, W = int(info["H"]), int(info["W"])
+    pos_scale = info.get("pos_scale", 1.0)
     h, w = H // 8, W // 8
     rows = np.array([list(map(float, ln.split())) for ln in lines[1:]]).reshape(-1, 7)
     mi, mj = rows[:, 0].astype(np.int64), rows[:, 1].astype(np.int64)
@@ -153,7 +174,7 @@ def main():
                 load(dump / f"tile{t:03d}_eloftr_backbone_{k}.f32", (D, h, w)),
                 coarse_in[k].numpy(),
             )
-        cos, sin = net.rotary_emb(coarse_in)
+        cos, sin = rope(net.rotary_emb.inv_freq, model.config, h, w, pos_scale)
         cos = cos.expand(2, -1, -1, -1).reshape(2, -1, D)
         sin = sin.expand(2, -1, -1, -1).reshape(2, -1, D)
         coarse = net.local_feature_transformer(

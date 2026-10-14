@@ -11,6 +11,7 @@
 #define ELOFTR_FINE_DIM 64 /* Fine feature dimension. */
 #define ELOFTR_BLOCKS 21   /* RepVGG blocks: 1 + 2 + 4 + 14. */
 #define ELOFTR_LAYERS 4    /* Transformer layers (self + cross each). */
+#define ELOFTR_TRAIN_RES 832 /* Training resolution of the "npe". */
 
 /* One aggregated attention block of the coarse transformer. */
 struct eloftr_attn {
@@ -38,6 +39,10 @@ struct eloftr_model {
     cl_kernel k_row_lse, k_col_lse, k_conf_row, k_conf_col, k_fine;
 
     /* Work buffers for tiles of H x W (multiples of ELOFTR_MULTIPLE). */
+    /* Scale of the RoPE positions, set before eloftr_alloc: 1 as
+     * Transformers; the authors' "npe" is 832 / the long side of the
+     * input (their training resolution over the test one). */
+    float pos_scale;
     int H, W, h, w, ah, aw, nmax;
     cl_mem img, s_a, s_b, f1[2], f2[2], x[2];   /* Backbone, per image. */
     cl_mem t_q, t_kv, t_qn, t_kvn, t_Q, t_K, t_V, t_O, t_O2, t_cat, t_tok,
@@ -55,8 +60,9 @@ struct eloftr_model {
 };
 
 /* Read the weights (a safetensors file of EfficientLoFTRForKeypointMatching
- * or a state_dict with the same names), fold the BatchNorms and upload.
- * Fatal on any missing tensor or shape mismatch. */
+ * or a state_dict with the same names: Efficient LoFTR's or
+ * MatchAnything's), fold the BatchNorms and upload. Fatal on any missing
+ * tensor or shape mismatch. */
 void eloftr_load(struct eloftr_model *m, struct ops *ops, struct pth_file *pf);
 
 /* Work buffers for tiles of up to H x W cells. */

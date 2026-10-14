@@ -48,6 +48,11 @@
     "model.safetensors"
 #define ELOFTR_SIZE 64263488LL
 
+/* MatchAnything's Efficient LoFTR weights converted by Hugging Face: read
+ * from a path only, never downloaded (the user's decision; see the
+ * manual for the licence). */
+#define MATCHANYTHING_REPO "https://huggingface.co/zju-community/matchanything_eloftr"
+
 /* Refinement windows, in cells: correlation radius and search. */
 #define REFINE_RADIUS 7
 #define REFINE_SEARCH 2
@@ -138,7 +143,7 @@ int main(int argc, char *argv[])
     struct gcp_list gl = {0, 0, NULL};
     char *ckpt = NULL;
     int stretch = 0, tile, overlap, step, nfeat, ntx, nty, tx, ty, t = 0;
-    int nactive, i, is_eloftr;
+    int nactive, i, is_eloftr, is_ma, npe;
     int H, W, multiple, nraw = 0, nshift = 0, ntol = 0, nref = 0;
     double lo = 0, hi = 100, max_shift = 0, tol = 0, threshold = 0;
     int est_kind, tile_type, region_type, nkept = 0, nfail = 0;
@@ -194,14 +199,18 @@ int main(int argc, char *argv[])
     opt.matcher = G_define_option();
     opt.matcher->key = "matcher";
     opt.matcher->type = TYPE_STRING;
-    opt.matcher->options = "disk,eloftr";
+    opt.matcher->options = "disk,eloftr,matchanything";
     opt.matcher->answer = "eloftr";
     opt.matcher->description = _("Matching method");
-    G_asprintf((char **)&opt.matcher->descriptions, "disk;%s;eloftr;%s",
+    G_asprintf((char **)&opt.matcher->descriptions,
+               "disk;%s;eloftr;%s;matchanything;%s",
                _("DISK keypoints matched and filtered by AdaLAM, on whole "
                  "cells"),
                _("Efficient LoFTR: detector-free semi-dense matches to a "
-                 "fraction of a cell"));
+                 "fraction of a cell"),
+               _("Efficient LoFTR with MatchAnything's cross-modal weights "
+                 "(given with checkpoint= or weights_dir=, not "
+                 "downloaded)"));
     opt.matcher->guisection = _("Model");
 
     opt.checkpoint = G_define_standard_option(G_OPT_F_INPUT);
@@ -209,8 +218,9 @@ int main(int argc, char *argv[])
     opt.checkpoint->required = NO;
     opt.checkpoint->description =
         _("Weights of the matcher (DISK: depth-save.pth or "
-          "epipolar-save.pth; eloftr: model.safetensors); default: in "
-          "weights_dir=, downloaded if missing");
+          "epipolar-save.pth; eloftr, matchanything: model.safetensors); "
+          "default: in weights_dir=, downloaded if missing (but "
+          "matchanything's)");
     opt.checkpoint->guisection = _("Model");
 
     opt.weights_dir = G_define_standard_option(G_OPT_M_DIR);
@@ -218,7 +228,8 @@ int main(int argc, char *argv[])
     opt.weights_dir->required = NO;
     opt.weights_dir->description =
         _("Folder of the matcher's weights (default: $DISK_MODELS_DIR or "
-          "~/models/disk, $ELOFTR_MODELS_DIR or ~/models/eloftr)");
+          "~/models/disk, $ELOFTR_MODELS_DIR or ~/models/eloftr, "
+          "$MATCHANYTHING_MODELS_DIR or ~/models/matchanything)");
     opt.weights_dir->guisection = _("Model");
 
     opt.model = G_define_option();
@@ -440,7 +451,8 @@ int main(int argc, char *argv[])
             G_fatal_error(_("percentile= must satisfy 0 <= low < high <= 100"));
         stretch = 1;
     }
-    is_eloftr = strcmp(opt.matcher->answer, "eloftr") == 0;
+    is_ma = strcmp(opt.matcher->answer, "matchanything") == 0;
+    is_eloftr = is_ma || strcmp(opt.matcher->answer, "eloftr") == 0;
     multiple = is_eloftr ? ELOFTR_MULTIPLE : DISK_MULTIPLE;
     tile = atoi(opt.tile_size->answer);
     tile = (tile + multiple - 1) / multiple * multiple;
@@ -485,6 +497,9 @@ int main(int argc, char *argv[])
 
         if (opt.weights_dir->answer)
             dir = G_store(opt.weights_dir->answer);
+        else if (is_ma)
+            dir = default_weights_dir("MATCHANYTHING_MODELS_DIR",
+                                      "matchanything");
         else if (is_eloftr)
             dir = default_weights_dir("ELOFTR_MODELS_DIR", "eloftr");
         else
@@ -498,6 +513,11 @@ int main(int argc, char *argv[])
             G_asprintf(&url, "%s/%s-save.pth", DOWNLOAD_URL,
                        opt.model->answer);
         }
+        if (!file_exists(ckpt) && is_ma)
+            G_fatal_error(_("MatchAnything weights <%s> not found: download "
+                            "model.safetensors from %s (read its licence) "
+                            "into that folder, or give checkpoint="),
+                          ckpt, MATCHANYTHING_REPO);
         if (!file_exists(ckpt)) {
             if (flag.offline->answer)
                 G_fatal_error(_("Checkpoint <%s> not found and -o given"),
@@ -545,8 +565,15 @@ int main(int argc, char *argv[])
     ops_init(&ops, &ocl);
     progress_end();
     pth_open(&pf, ckpt);
+    /* RoPE position scaling: MatchAnything's wrapper always applies it,
+     * Efficient LoFTR's defaults do not; I_COREGISTRATION_OPENCL_NPE=0
+     * or 1 overrides (evaluation aid). */
+    npe = is_ma;
+    if (getenv("I_COREGISTRATION_OPENCL_NPE") &&
+        *getenv("I_COREGISTRATION_OPENCL_NPE"))
+        npe = atoi(getenv("I_COREGISTRATION_OPENCL_NPE")) != 0;
     if (is_eloftr)
-        matcher_eloftr_create(&matcher, &ops, &pf);
+        matcher_eloftr_create(&matcher, &ops, &pf, opt.matcher->answer, npe);
     else
         matcher_disk_create(&matcher, &ops, &pf, &dcfg);
     pth_close(&pf);

@@ -27,6 +27,7 @@
 
 struct eloftr_state {
     struct eloftr_model net;
+    int npe;
     float *grey0, *grey1;
 };
 
@@ -45,6 +46,8 @@ static void eloftr_m_alloc(struct matcher *m, int H, int W)
 {
     struct eloftr_state *s = m->state;
 
+    if (s->npe)
+        s->net.pos_scale = (float)ELOFTR_TRAIN_RES / (H > W ? H : W);
     eloftr_alloc(&s->net, H, W);
     s->grey0 = G_malloc((size_t)H * W * sizeof(float));
     s->grey1 = G_malloc((size_t)H * W * sizeof(float));
@@ -115,8 +118,8 @@ static void eloftr_m_dump(struct matcher *m, const struct matcher_tile *t,
              t->index);
     if (!(fp = fopen(path, "w")))
         G_fatal_error(_("Unable to write debug dump <%s>"), path);
-    fprintf(fp, "# x0 %d y0 %d w %d h %d H %d W %d\n", t->x0, t->y0, t->w,
-            t->h, t->H, t->W);
+    fprintf(fp, "# x0 %d y0 %d w %d h %d H %d W %d pos_scale %.9g\n", t->x0,
+            t->y0, t->w, t->h, t->H, t->W, s->net.pos_scale);
     for (i = 0; i < s->net.nm; i++) {
         const float *k = s->net.kp + 4 * (size_t)i;
 
@@ -138,13 +141,14 @@ static void eloftr_m_destroy(struct matcher *m)
 }
 
 void matcher_eloftr_create(struct matcher *m, struct ops *ops,
-                           struct pth_file *pf)
+                           struct pth_file *pf, const char *name, int npe)
 {
     struct eloftr_state *s = G_calloc(1, sizeof(*s));
 
     eloftr_load(&s->net, ops, pf);
+    s->npe = npe;
     memset(m, 0, sizeof(*m));
-    m->name = "eloftr";
+    m->name = name;
     m->multiple = ELOFTR_MULTIPLE;
     m->ops = ops;
     m->state = s;

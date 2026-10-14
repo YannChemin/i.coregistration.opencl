@@ -237,6 +237,7 @@ void eloftr_load(struct eloftr_model *m, struct ops *ops, struct pth_file *pf)
     memset(m, 0, sizeof(*m));
     m->ops = ops;
     m->ocl = ops->ocl;
+    m->pos_scale = 1.0f;
     progress_begin(PG_LOAD, pth_bytes(pf, "") / 1073741824.0);
     for (s = 0; s < 4; s++)
         for (b = 0; b < stage_blocks[s]; b++, l++) {
@@ -264,10 +265,11 @@ static cl_mem walloc(struct eloftr_model *m, size_t floats, const char *what)
     return ocl_alloc(m->ocl, floats * sizeof(float), what);
 }
 
-/* RoPE angles of the aggregated grid: position (i, j), 1-based, pair p
- * of the 256 channels: i * f(p / 2) for even p, j * f(p / 2) for odd
- * p, f(k) = base^(-2k / ROPE_DIM) (compute_embeddings of the reference,
- * with rotate_half on interleaved pairs). */
+/* RoPE angles of the aggregated grid: position (i, j), 1-based and
+ * multiplied by pos_scale, pair p of the 256 channels: i * f(p / 2) for
+ * even p, j * f(p / 2) for odd p, f(k) = base^(-2k / ROPE_DIM)
+ * (compute_embeddings of the reference, with rotate_half on interleaved
+ * pairs; the authors' RoPEPositionEncodingSine with npe). */
 static void rope_table(struct eloftr_model *m)
 {
     int np = ELOFTR_DIM / 2, i, j, p;
@@ -278,7 +280,8 @@ static void rope_table(struct eloftr_model *m)
             for (p = 0; p < np; p++) {
                 float f = (float)(1.0 / pow(ROPE_BASE,
                                             (double)(2 * (p / 2)) / ROPE_DIM));
-                float a = (p % 2 ? (float)(j + 1) : (float)(i + 1)) * f;
+                float a = (p % 2 ? (float)(j + 1) : (float)(i + 1)) *
+                          m->pos_scale * f;
                 float *q = t + (((size_t)i * m->aw + j) * np + p) * 2;
 
                 q[0] = cosf(a);
