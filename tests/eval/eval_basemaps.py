@@ -16,9 +16,12 @@ deviation), and the leave-one-out residuals of a polynomial of order 1
 and 2 fitted to the shifts (median, 90th percentile; the larger the
 residual, the more the points disagree with a smooth model: outliers,
 moved objects, local distortion of either image). Over the loop: the
-closure of the composed shift fields (each a median shift per 256 x 256
-cell block, bilinearly interpolated), median and 90th percentile, in map
-units. Results go to <dir>/basemaps.json and basemaps.md; progress lines
+closure of the composed shift fields (each a median shift per block of
+--grid x --grid cells, 256 by default, bilinearly interpolated), median
+and 90th percentile, in map units. With --pairs star, the first image
+is matched to each of the others instead (a scene against several
+references), without closure.
+Results go to <dir>/basemaps.json and basemaps.md; progress lines
 "k/n pair" to stdout. Not shipped with the module.
 """
 
@@ -35,7 +38,6 @@ import grass.script as gs
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
-GRID = 256  # Cells per block of the gridded shift field.
 MIN_BLOCK = 5  # Control points a block needs.
 
 
@@ -101,10 +103,10 @@ def loo_residuals(pts, order, region):
     return np.hypot(loo[:, 0], loo[:, 1])
 
 
-def shift_grid(pts, region):
-    """Median shift per GRID x GRID block, NaN where too few points."""
+def shift_grid(pts, region, grid):
+    """Median shift per grid x grid block, NaN where too few points."""
     w, n = region["w"], region["n"]
-    bx, by = GRID * region["ewres"], GRID * region["nsres"]
+    bx, by = grid * region["ewres"], grid * region["nsres"]
     nx = int(np.ceil((region["e"] - w) / bx))
     ny = int(np.ceil((n - region["s"]) / by))
     ix = np.clip(((pts[:, 0] - w) / bx).astype(int), 0, nx - 1)
@@ -130,6 +132,16 @@ def main():
     ap.add_argument("--module", default="i.coregistration.opencl")
     ap.add_argument("--flags", default="s")
     ap.add_argument("--tag", default="")
+    ap.add_argument(
+        "--grid", type=int, default=256, help="cells per block of the shift fields"
+    )
+    ap.add_argument(
+        "--pairs",
+        choices=("loop", "star"),
+        default="loop",
+        help="loop: each image to the next and the last to the first; "
+        "star: the first image to each other one",
+    )
     args = ap.parse_args()
     if len(args.images) < 2:
         gs.fatal("Give at least two images")
@@ -150,7 +162,10 @@ def main():
     gs.run_command("g.region", raster="im0.1")
     region = gs.region()
     m = len(names)
-    pairs = [(k, (k + 1) % m) for k in range(m if m > 2 else 1)]
+    if args.pairs == "star":
+        pairs = [(0, k) for k in range(1, m)]
+    else:
+        pairs = [(k, (k + 1) % m) for k in range(m if m > 2 else 1)]
     results = {
         "tag": args.tag,
         "images": [Path(p).name for p in args.images],
@@ -189,11 +204,11 @@ def main():
             )
         r.update(info)
         results["pairs"][label] = r
-        fields.append(shift_grid(pts, region))
+        fields.append(shift_grid(pts, region, args.grid))
         print(f"{label}: {json.dumps(r)}", flush=True)
-    if m > 2:
+    if m > 2 and args.pairs == "loop":
         # Closure at block centres: follow the fields around the loop.
-        bx, by = GRID * region["ewres"], GRID * region["nsres"]
+        bx, by = args.grid * region["ewres"], args.grid * region["nsres"]
         xs = np.arange(region["w"] + bx / 2, region["e"], bx)
         ys = np.arange(region["n"] - by / 2, region["s"], -by)
         X, Y = np.meshgrid(xs, ys)
@@ -245,7 +260,7 @@ def main():
         lp = results["loop"]
         lines += [
             "",
-            f"Loop closure over {lp['evaluated']} of {lp['nodes']} blocks of {GRID} cells: median "
+            f"Loop closure over {lp['evaluated']} of {lp['nodes']} blocks of {args.grid} cells: median "
             f"{lp['closure_median']}, 90th percentile {lp['closure_p90']} map units.",
         ]
     (out / "basemaps.md").write_text("\n".join(lines) + "\n")

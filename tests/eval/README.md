@@ -17,6 +17,10 @@ images may be confidential).
   last to the first: shift, leave-one-out residuals of polynomials of
   order 1 and 2, loop closure of the composed shift fields with three or
   more images.
+- `prepare_hyperspectral.py`: the cross-modal pair. From a hyperspectral
+  Zarr cube (hyp4u layout) and RGB basemaps: a true-colour composite of
+  the bands nearest 640, 550 and 460 nm on the cube's grid, and each
+  basemap averaged onto that grid, for `eval_basemaps.py`.
 - `run_server.sh`: builds the working tree on the GPU server (in its own
   folder, the installed module untouched), uploads the images to a
   private `/tmp` folder, runs one evaluation detached, fetches the
@@ -26,17 +30,13 @@ images may be confidential).
 ```sh
 tests/eval/run_server.sh <tag> synthetic ref.tif [--size 2048] [--flags s]
 tests/eval/run_server.sh <tag> basemaps a.tif b.tif c.tif [-- --flags s]
+python3 tests/eval/prepare_hyperspectral.py cube.zarr esri.tif google.tif bing.tif --output <dir>
+tests/eval/run_server.sh <tag> basemaps <dir>/hs_rgb.tif <dir>/*_hsgrid.tif -- --pairs star
 ```
 
 Both scripts run inside a GRASS session (`grass --tmp-project
 <image> --exec python3 ...`) and take `--module` to evaluate a build
 other than the installed one.
-
-## Not covered yet
-
-The cross-modal case (a hyperspectral band composite against an RGB
-basemap, PLAN.md phase 3) runs with `eval_basemaps.py` on two images
-once the composite is exported as a GeoTIFF on the basemap grid.
 
 ## Baseline (v0: DISK + AdaLAM)
 
@@ -70,6 +70,23 @@ Three basemaps (ESRI, Google, Bing), 4072 x 4072 cells (0.5 m), `-s`,
 Loop closure (ESRI -> Google -> Bing -> ESRI) over 185 of 256
 blocks of 256 cells: median 0.212 m, 90th percentile 0.55 m.
 
+Cross-modal: the Tucson AVIRIS scene (`~/RSDATA/cropped_tucson.zarr`,
+11.3 m, bands 641.7, 551.5 and 461.6 nm) against the three basemaps
+averaged onto its grid, 762 x 558 cells (one tile), `-s`; metres:
+
+| pair | points | median shift E, N | median absolute deviation E, N | LOO order 1 median, p90 |
+|---|---|---|---|---|
+| AVIRIS -> ESRI | 965 | -1.83, -0.77 | 1.35, 1.47 | 2.72, 25.2 |
+| AVIRIS -> Google | 1029 | -2.00, -0.21 | 1.47, 1.15 | 3.91, 29.6 |
+| AVIRIS -> Bing | 986 | -1.52, -0.53 | 1.52, 1.17 | 2.48, 33.0 |
+| ESRI -> Google (same grid) | 1005 | 0.37, 0.00 | 0.45, 0.48 | 0.85, 2.05 |
+| Google -> Bing (same grid) | 742 | -0.17, -0.22 | 0.48, 0.22 | 0.63, 1.56 |
+| Bing -> AVIRIS | 856 | 1.59, 0.51 | 1.46, 1.09 | 2.44, 20.4 |
+
+Loop AVIRIS -> ESRI -> Google -> Bing -> AVIRIS, blocks of 64 cells:
+median closure 0.93 m, 90th percentile 1.30 m, but over only 13 of 108
+blocks (the others lack 5 points on one of the four legs).
+
 Findings for the next phases:
 
 - Without moved objects, v0 is accurate and clean: 0.12-0.27 cell
@@ -85,6 +102,14 @@ Findings for the next phases:
 - On real basemaps the leave-one-out residuals have a heavy tail (90th
   percentile 1.4-3.1 m against medians of 0.3-1.0 m): the outliers and
   moved aircraft that a robust stage should weigh down.
+- Cross-modal, DISK + AdaLAM already finds about 1000 control points
+  between AVIRIS and each basemap. Their core agrees: the three
+  references give the same shift within about 0.6 m (0.05 cell), and the
+  reverse leg (Bing -> AVIRIS) has the opposite sign. But the tail is
+  heavy: the 90th percentile of the leave-one-out residuals is 20-33 m
+  (2-3 cells) against 2-3 m for the median, so more than 10 % of the
+  points are wrong. A robust stage matters even more here, and this pair
+  is the yardstick for MatchAnything (phase 3).
 - Host-side matching (nearest neighbours, AdaLAM, `-s` refinement)
   takes 3 to 6 times as long as DISK on the GPU: the CPU stage is the
   bottleneck on the server.

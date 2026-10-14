@@ -83,8 +83,9 @@ PyTorch on the WX 7100, `tests/ops_check.c` + `tests/ops_compare.py`),
 points bit-identical to v0 on 25 tiles; pytest 5/5 on the server; same
 speed (1 min 45 s for 25 tiles). Not done: a separate fast 3x3 or
 im2col path for ELoFTR's convolutions (left to phase 2, when its sizes
-are known), and the cross-modal eval pair (needs the hyperspectral
-composite exported as a GeoTIFF). Baseline and findings in
+are known). Cross-modal pair added afterwards (AVIRIS against the
+three basemaps on the AVIRIS grid, `tests/eval/prepare_hyperspectral.py`).
+Baseline and findings in
 `tests/eval/README.md`; the main one for phase 1: moved aircraft-sized
 objects pass AdaLAM (13 % of points) and bring about 7 % of wrong ground
 points with them.

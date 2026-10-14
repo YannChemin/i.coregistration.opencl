@@ -31,6 +31,13 @@ state, how to build, test and run, and what is still to be decided.
   `tests/eval/` harness. Bit-identical to v0 on 25 Tucson tiles (all
   dumps and the control point table). Baseline numbers in
   `tests/eval/README.md`.
+- Evaluation data (confidential, never in the repository): Tucson
+  basemaps `esri_worldimagery_aoi.tif`, `google_satellite_aoi.tif`,
+  `bing_aerial_aoi.tif` (0.5 m, 17200 x 12600) in the report's `data/`;
+  AVIRIS cube `~/RSDATA/cropped_tucson.zarr` (424 bands, 11.3 m, read by
+  `tests/eval/prepare_hyperspectral.py`). Phase 0 used 4072-cell crops
+  of the basemaps (`gdal_translate -projwin 510500 3560500 512536
+  3558464`).
 
 ## Next step
 
