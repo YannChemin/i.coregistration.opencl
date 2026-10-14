@@ -223,6 +223,26 @@ the NCC refinement. Eval against v0 on the Tucson basemaps.
 Memory per 1024-cell tile: backbone features about 0.3 GiB per image,
 transformer small (1/8 tokens), coarse matching blockwise.
 
+Status (2026-10-14): done, with these differences from the plan.
+Translated from Transformers 4.57's EfficientLoFTRForKeypointMatching,
+whose names the published weights use (`zju-community/efficientloftr`,
+safetensors, Apache 2.0: downloaded when missing, as DISK's), checked
+against the authors' code at ffd4a46; `pth_loader.c` reads safetensors.
+Files `eloftr.c/.h`, `eloftr_kernels.cl` (blockwise dual softmax, fine
+matching), `matcher_eloftr.c/.h`; only one (outdoor) configuration.
+Transformers departs from the authors after the network (coarse pairs,
+fine first-stage scale and its gather): the module and
+`tests/reference_compare_eloftr.py` follow the authors. Parity on one
+Google/ESRI tile: 14009/14009 coarse matches, fine positions within
+6e-5 pixel but for 3 float ties. The general convolution now runs as
+im2col + GEMM by blocks (`ops.c`, checked by two new `ops_check`
+cases, 41/41): 16.2 s to 2.1 s per tile. AdaLAM is not offered after
+ELoFTR. pytest 8/8 on the server (new: ELoFTR recovers a known shift).
+Eval in `tests/eval/README.md`: 13-18 times the control points, full
+coverage, lower basemap LOO p90, faster; but ELoFTR's own sub-cell
+estimate leans to whole cells (the weights' behaviour, checked), so
+`-s` is needed for DISK-level accuracy.
+
 ## Phase 3. MatchAnything (cross-modality, ELoFTR weights)
 
 Source: code and weights in the Hugging Face Space

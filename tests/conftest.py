@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: Unlicense
 """pytest fixtures for i.coregistration.opencl.
 
-The matching tests need the DISK checkpoint and an OpenCL device, neither
-of which can be assumed on a test machine. They are skipped unless the
-checkpoint path is given in I_COREGISTRATION_OPENCL_CHECKPOINT.
+The matching tests need the weights and an OpenCL device, neither of
+which can be assumed on a test machine. They are skipped unless the
+weights are given: the DISK checkpoint in
+I_COREGISTRATION_OPENCL_CHECKPOINT, the Efficient LoFTR model.safetensors
+in I_COREGISTRATION_OPENCL_ELOFTR.
 I_COREGISTRATION_OPENCL_PLATFORM optionally selects the OpenCL platform
 (for Mesa rusticl, also export RUSTICL_ENABLE=radeonsi or the matching
 driver). I_COREGISTRATION_OPENCL_BINDIR, when set, is put first in the
@@ -75,6 +77,15 @@ def checkpoint():
     path = os.environ.get("I_COREGISTRATION_OPENCL_CHECKPOINT")
     if not path or not Path(path).is_file():
         pytest.skip("set I_COREGISTRATION_OPENCL_CHECKPOINT to depth-save.pth")
+    return path
+
+
+@pytest.fixture
+def eloftr_weights():
+    """Path of the Efficient LoFTR weights (model.safetensors), or skip."""
+    path = os.environ.get("I_COREGISTRATION_OPENCL_ELOFTR")
+    if not path or not Path(path).is_file():
+        pytest.skip("set I_COREGISTRATION_OPENCL_ELOFTR to model.safetensors")
     return path
 
 

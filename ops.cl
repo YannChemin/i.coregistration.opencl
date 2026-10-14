@@ -793,23 +793,24 @@ __kernel void grid_sample(__global const float *in, const int C, const int H,
 }
 
 /* Local windows of a (C, H, W) tensor, as torch F.unfold: kh x kw
- * windows, stride, zero padding, into a (C * kh * kw, L) tensor, row
- * c * kh * kw + i * kw + j, column l = oy * Wo + ox. */
+ * windows, stride, zero padding, into a (C * kh * kw, n) tensor, row
+ * c * kh * kw + i * kw + j, column l - l0 for the n windows l = oy * Wo
+ * + ox from l0 (im2col of a part of the output). */
 __kernel void unfold(__global const float *in, const int C, const int H,
                      const int W, const int kh, const int kw, const int sy,
                      const int sx, const int py, const int px, const int Ho,
-                     const int Wo, __global float *out)
+                     const int Wo, const int l0, const int n,
+                     __global float *out)
 {
-    const int l = get_global_id(0), row = get_global_id(1);
-    const int L = Ho * Wo, c = row / (kh * kw), i = (row / kw) % kh,
-              j = row % kw;
+    const int t = get_global_id(0), row = get_global_id(1), l = l0 + t;
+    const int c = row / (kh * kw), i = (row / kw) % kh, j = row % kw;
     int iy, ix;
 
-    if (l >= L || row >= C * kh * kw)
+    if (t >= n || l >= Ho * Wo || row >= C * kh * kw)
         return;
     iy = (l / Wo) * sy - py + i;
     ix = (l % Wo) * sx - px + j;
-    out[(size_t)row * L + l] = iy >= 0 && iy < H && ix >= 0 && ix < W
+    out[(size_t)row * n + t] = iy >= 0 && iy < H && ix >= 0 && ix < W
                                    ? in[((size_t)c * H + iy) * W + ix]
                                    : 0.0f;
 }

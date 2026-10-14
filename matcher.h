@@ -40,6 +40,9 @@ struct matcher {
     int multiple; /* Tile sides must be multiples of this. */
     struct ops *ops;
     void *state;
+    /* Developer aid: folder of the debug dumps (I_COREGISTRATION_OPENCL_DUMP)
+     * or NULL; matchers that dump during run read it there. */
+    const char *dump_dir;
     /* Work buffers for tiles of up to H x W cells. */
     void (*alloc)(struct matcher *m, int H, int W);
     /* Device stage on one tile; returns once its results are read back

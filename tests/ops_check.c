@@ -456,6 +456,12 @@ int main(int argc, char *argv[])
     case_conv("conv3x3_dil2", 5, 21, 26, 7, 3, 1, 2, 2, 1, ACT_LEAKY, 0);
     case_conv("conv_dw4_s4", 8, 32, 40, 8, 4, 4, 0, 1, 8, ACT_NONE, 0);
     case_conv("conv5x5_norm_relu", 6, 19, 23, 5, 5, 1, 2, 1, 1, ACT_RELU, 1);
+    case_conv("conv3x3_im2col", 24, 37, 29, 20, 3, 1, 1, 1, 1, ACT_RELU, 0);
+    /* Three im2col blocks of at most 128 output positions. */
+    o.im2col_bytes = 16 * 9 * 128 * sizeof(float);
+    case_conv("conv3x3_s2_im2col_blocks", 16, 33, 41, 12, 3, 2, 1, 1, 1,
+              ACT_LEAKY, 0);
+    o.im2col_bytes = (size_t)256 << 20;
     case_instnorm("instnorm", 7, 1000);
     case_layernorm("layernorm_96", 50, 96);
     case_layernorm("layernorm_1030", 9, 1030);

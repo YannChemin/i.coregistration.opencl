@@ -109,6 +109,7 @@ void ops_init(struct ops *o, struct ocl_backend *ocl)
     o->pool2d = ocl_kernel(ocl, "pool2d");
     o->transpose2d = ocl_kernel(ocl, "transpose2d");
     o->axpby = ocl_kernel(ocl, "axpby");
+    o->im2col_bytes = (size_t)256 << 20;
 }
 
 void ops_free(struct ops *o)
@@ -120,6 +121,7 @@ void ops_free(struct ops *o)
     for (; k <= end; k++)
         if (*k)
             clReleaseKernel(*k);
+    ocl_release(&o->scratch);
     memset(o, 0, sizeof(*o));
 }
 
@@ -216,6 +218,55 @@ int ops_conv_out(int n, int k, int s, int p, int d)
     return (n + 2 * p - d * (k - 1) - 1) / s + 1;
 }
 
+static void unfold_range(struct ops *o, cl_mem in, int C, int H, int W,
+                         const struct conv_geom *g, int Ho, int Wo, int l0,
+                         int n, cl_mem out)
+{
+    cl_kernel k = o->unfold;
+    cl_int v[13] = {C,     H,     W,     g->kh, g->kw, g->sy, g->sx,
+                    g->py, g->px, Ho,    Wo,    l0,    n};
+    size_t gs[2] = {round_up((size_t)n, 64), (size_t)C * g->kh * g->kw},
+           ls[2] = {64, 1};
+    int i;
+
+    SETARG(k, 0, in);
+    for (i = 0; i < 13; i++)
+        SETARG(k, 1 + i, v[i]);
+    SETARG(k, 14, out);
+    ops_run(o->ocl, k, 2, gs, ls, "unfold");
+}
+
+/* Convolution as W (K, C kh kw) times the unfolded input, by blocks of
+ * output positions that fit the scratch buffer. */
+static void conv_im2col(struct ops *o, cl_mem in, int C, int H, int W,
+                        cl_mem w, cl_mem b, int K, const struct conv_geom *g,
+                        int Ho, int Wo, int act, float slope, cl_mem out)
+{
+    int Kc = C * g->kh * g->kw, L = Ho * Wo, l0;
+    size_t cap = o->im2col_bytes < o->ocl->max_alloc ? o->im2col_bytes
+                                                     : o->ocl->max_alloc;
+    int blk = (int)(cap / sizeof(float) / Kc) / 128 * 128;
+    size_t need;
+
+    if (blk < 128)
+        blk = 128;
+    if (blk > L)
+        blk = L;
+    need = (size_t)Kc * blk * sizeof(float);
+    if (need > o->scratch_bytes) {
+        ocl_release(&o->scratch);
+        o->scratch = ocl_alloc(o->ocl, need, "im2col");
+        o->scratch_bytes = need;
+    }
+    for (l0 = 0; l0 < L; l0 += blk) {
+        int n = L - l0 < blk ? L - l0 : blk;
+
+        unfold_range(o, in, C, H, W, g, Ho, Wo, l0, n, o->scratch);
+        ops_gemm(o, K, n, Kc, ops_mat(w, 0, Kc), ops_mat(o->scratch, 0, n), 0,
+                 ops_mat(out, l0, L), 1, 1, b, 1, NULL, 0, 1.0f, act, slope);
+    }
+}
+
 void ops_conv2d(struct ops *o, cl_mem in, int C, int H, int W, cl_mem w,
                 cl_mem b, int K, const struct conv_geom *g, cl_mem mean,
                 cl_mem rstd, cl_mem alpha, int act, float slope, cl_mem out)
@@ -253,6 +304,11 @@ void ops_conv2d(struct ops *o, cl_mem in, int C, int H, int W, cl_mem w,
         SETARG(k, 10, norm);
         SETARG(k, 11, out);
         ops_run(o->ocl, k, 3, gs, ls, "conv5x5");
+        return;
+    }
+    if (g->groups == 1 && !mean && !alpha && g->dy == 1 && g->dx == 1) {
+        count((long)C * g->kh * g->kw * 128, "im2col block");
+        conv_im2col(o, in, C, H, W, w, b, K, g, Ho, Wo, act, slope, out);
         return;
     }
     {
@@ -483,20 +539,11 @@ void ops_grid_sample(struct ops *o, cl_mem in, int C, int H, int W, cl_mem grid,
 void ops_unfold(struct ops *o, cl_mem in, int C, int H, int W,
                 const struct conv_geom *g, cl_mem out)
 {
-    cl_kernel k = o->unfold;
-    cl_int Ho = ops_conv_out(H, g->kh, g->sy, g->py, 1);
-    cl_int Wo = ops_conv_out(W, g->kw, g->sx, g->px, 1);
-    cl_int v[11] = {C, H, W, g->kh, g->kw, g->sy, g->sx, g->py, g->px, Ho, Wo};
-    size_t gs[2] = {round_up((size_t)Ho * Wo, 64), (size_t)C * g->kh * g->kw},
-           ls[2] = {64, 1};
-    int i;
+    int Ho = ops_conv_out(H, g->kh, g->sy, g->py, 1);
+    int Wo = ops_conv_out(W, g->kw, g->sx, g->px, 1);
 
     count((long)C * g->kh * g->kw * Ho * Wo, "unfold output");
-    SETARG(k, 0, in);
-    for (i = 0; i < 11; i++)
-        SETARG(k, 1 + i, v[i]);
-    SETARG(k, 12, out);
-    ops_run(o->ocl, k, 2, gs, ls, "unfold");
+    unfold_range(o, in, C, H, W, g, Ho, Wo, 0, Ho * Wo, out);
 }
 
 void ops_avgpool2(struct ops *o, cl_mem in, int C, int H, int W, cl_mem out)

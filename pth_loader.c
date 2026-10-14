@@ -6,6 +6,8 @@
  *               zip format and in the legacy format of torch < 1.6
  *               (DISK's published weights): parses the state_dict pickle
  *               and locates each storage, without any Python dependency.
+ *               Also reads safetensors files (Hugging Face weights): a
+ *               JSON header followed by contiguous tensors.
  *
  * SPDX-License-Identifier: Unlicense
  *
@@ -903,6 +905,219 @@ static const struct pv *open_legacy(struct pth_file *pf, const char *path,
     return sd;
 }
 
+/* safetensors: an 8-byte little-endian header length, a JSON object
+ * mapping tensor names to {"dtype", "shape", "data_offsets"} (plus an
+ * optional "__metadata__"), then the data. A small parser for exactly
+ * that structure; tensors of other dtypes than F32, F16 and BF16 (such
+ * as BatchNorm's I64 counters) are skipped. */
+struct json {
+    const char *p, *end, *path;
+};
+
+static void json_ws(struct json *j)
+{
+    while (j->p < j->end &&
+           (*j->p == ' ' || *j->p == '\n' || *j->p == '\r' || *j->p == '\t'))
+        j->p++;
+}
+
+static void json_expect(struct json *j, char c)
+{
+    json_ws(j);
+    if (j->p >= j->end || *j->p != c)
+        G_fatal_error(_("Malformed safetensors header in <%s>"), j->path);
+    j->p++;
+}
+
+/* A string without escapes other than \" and \\ (tensor names). */
+static char *json_string(struct json *j)
+{
+    char *out, *o;
+    const char *q;
+
+    json_expect(j, '"');
+    out = o = G_malloc(j->end - j->p + 1);
+    for (q = j->p; q < j->end && *q != '"'; q++) {
+        if (*q == '\\' && q + 1 < j->end)
+            q++;
+        *o++ = *q;
+    }
+    if (q >= j->end)
+        G_fatal_error(_("Malformed safetensors header in <%s>"), j->path);
+    *o = '\0';
+    j->p = q + 1;
+    return out;
+}
+
+static long json_int(struct json *j)
+{
+    char *e;
+    long v;
+
+    json_ws(j);
+    v = strtol(j->p, &e, 10);
+    if (e == j->p)
+        G_fatal_error(_("Malformed safetensors header in <%s>"), j->path);
+    j->p = e;
+    return v;
+}
+
+/* Skip any value (the metadata object). */
+static void json_skip(struct json *j)
+{
+    int depth = 0;
+
+    json_ws(j);
+    do {
+        if (j->p >= j->end)
+            G_fatal_error(_("Malformed safetensors header in <%s>"), j->path);
+        if (*j->p == '"') {
+            G_free(json_string(j));
+            continue;
+        }
+        if (*j->p == '{' || *j->p == '[')
+            depth++;
+        else if (*j->p == '}' || *j->p == ']')
+            depth--;
+        j->p++;
+        json_ws(j);
+    } while (depth > 0 || (j->p < j->end && *j->p != ',' && *j->p != '}'));
+}
+
+static int open_safetensors(struct pth_file *pf, const char *path)
+{
+    unsigned char h8[9];
+    uint64_t hlen;
+    off_t base;
+    char *hdr;
+    struct json j;
+    int cap = 64;
+
+    if (fseeko(pf->fp, 0, SEEK_END) != 0)
+        return 0;
+    base = ftello(pf->fp);
+    if (base < 9 || fseeko(pf->fp, 0, SEEK_SET) != 0 ||
+        fread(h8, 1, 9, pf->fp) != 9)
+        return 0;
+    hlen = rd64(h8);
+    if (h8[8] != '{' || hlen < 2 || (off_t)(8 + hlen) > base)
+        return 0;
+    hdr = G_malloc(hlen);
+    read_at(pf->fp, 8, hdr, hlen, path);
+    j.p = hdr;
+    j.end = hdr + hlen;
+    j.path = path;
+    pf->tensors = G_calloc(cap, sizeof(struct pth_tensor));
+    json_expect(&j, '{');
+    for (;;) {
+        char *name, *dtype = NULL;
+        long shape[PTH_MAX_DIMS], off0 = -1, off1 = -1;
+        int ndim = 0, d;
+
+        json_ws(&j);
+        if (j.p < j.end && *j.p == '}')
+            break;
+        name = json_string(&j);
+        json_expect(&j, ':');
+        if (strcmp(name, "__metadata__") == 0) {
+            json_skip(&j);
+            G_free(name);
+        }
+        else {
+            json_expect(&j, '{');
+            for (;;) {
+                char *key = json_string(&j);
+
+                json_expect(&j, ':');
+                if (strcmp(key, "dtype") == 0)
+                    dtype = json_string(&j);
+                else if (strcmp(key, "shape") == 0 ||
+                         strcmp(key, "data_offsets") == 0) {
+                    int is_shape = key[0] == 's', n = 0;
+
+                    json_expect(&j, '[');
+                    json_ws(&j);
+                    while (j.p < j.end && *j.p != ']') {
+                        long v = json_int(&j);
+
+                        if (is_shape) {
+                            if (n >= PTH_MAX_DIMS)
+                                G_fatal_error(_("Tensor <%s> has too many "
+                                                "dimensions"),
+                                              name);
+                            shape[n] = v;
+                        }
+                        else if (n == 0)
+                            off0 = v;
+                        else
+                            off1 = v;
+                        n++;
+                        json_ws(&j);
+                        if (*j.p == ',')
+                            j.p++;
+                        json_ws(&j);
+                    }
+                    json_expect(&j, ']');
+                    if (is_shape)
+                        ndim = n;
+                }
+                else
+                    json_skip(&j);
+                G_free(key);
+                json_ws(&j);
+                if (*j.p == ',') {
+                    j.p++;
+                    continue;
+                }
+                json_expect(&j, '}');
+                break;
+            }
+            if (dtype && off0 >= 0 && off1 >= off0 &&
+                (!strcmp(dtype, "F32") || !strcmp(dtype, "F16") ||
+                 !strcmp(dtype, "BF16"))) {
+                struct pth_tensor *t;
+                long n = 1, stride = 1;
+
+                if (pf->ntensors == cap) {
+                    cap *= 2;
+                    pf->tensors =
+                        G_realloc(pf->tensors, cap * sizeof(struct pth_tensor));
+                }
+                t = &pf->tensors[pf->ntensors++];
+                memset(t, 0, sizeof(*t));
+                t->name = name;
+                t->ndim = ndim;
+                t->dtype = !strcmp(dtype, "F32")   ? PTH_F32
+                           : !strcmp(dtype, "F16") ? PTH_F16
+                                                   : PTH_BF16;
+                for (d = 0; d < ndim; d++)
+                    n *= shape[d];
+                for (d = ndim - 1; d >= 0; d--) {
+                    t->shape[d] = shape[d];
+                    t->stride[d] = stride;
+                    stride *= shape[d];
+                }
+                t->data_offset = 8 + (off_t)hlen + off0;
+                t->storage_bytes = off1 - off0;
+                if ((size_t)n * dtype_size(t->dtype) != t->storage_bytes ||
+                    t->data_offset + (off_t)t->storage_bytes > base)
+                    G_fatal_error(_("Tensor <%s> does not match its data in "
+                                    "<%s>"),
+                                  name, path);
+            }
+            else
+                G_free(name);
+            G_free(dtype);
+        }
+        json_ws(&j);
+        if (j.p < j.end && *j.p == ',')
+            j.p++;
+    }
+    G_free(hdr);
+    G_verbose_message(_("safetensors <%s>: %d tensors"), path, pf->ntensors);
+    return 1;
+}
+
 void pth_open(struct pth_file *pf, const char *path)
 {
     const struct pv *sd;
@@ -918,6 +1133,9 @@ void pth_open(struct pth_file *pf, const char *path)
         G_fatal_error(_("Unable to open checkpoint <%s>"), path);
     if (fread(sig, 1, 4, pf->fp) != 4)
         G_fatal_error(_("<%s> is too short to be a PyTorch checkpoint"), path);
+    if (memcmp(sig, "PK\003\004", 4) != 0 && open_safetensors(pf, path))
+        return;
+    fseeko(pf->fp, 4, SEEK_SET);
 
     memset(&m, 0, sizeof(m));
     if (memcmp(sig, "PK\003\004", 4) == 0)

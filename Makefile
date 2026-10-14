@@ -15,7 +15,8 @@ include $(MODULE_TOPDIR)/include/Make/Module.make
 default: cmd
 
 # Embed the OpenCL kernels as C string literals.
-$(OBJDIR)/ocl_backend.o: $(OBJDIR)/ops_cl.h $(OBJDIR)/disk_kernels_cl.h
+$(OBJDIR)/ocl_backend.o: $(OBJDIR)/ops_cl.h $(OBJDIR)/disk_kernels_cl.h \
+	$(OBJDIR)/eloftr_kernels_cl.h
 
 $(OBJDIR)/%_cl.h: %.cl | $(OBJDIR)
 	sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/^/"/' -e 's/$$/\\n"/' $< > $@

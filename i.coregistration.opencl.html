@@ -10,9 +10,11 @@ around confident seed matches. A robust model fitted per tile then
 makes the remaining outliers (objects that moved between the images,
 mismatches) inactive control points. Neither Python nor PyTorch is
 needed at run time.</p>
-<p>The matching method is chosen with <b>matcher</b>. DISK with AdaLAM
-(<code>disk</code>) is the only one so far; detector-free and dense matchers will
-be added as further choices, with the same outputs.</p>
+<p>The matching method is chosen with <b>matcher</b>: DISK keypoints matched
+and filtered by AdaLAM (<code>disk</code>, the default), or Efficient LoFTR
+(<code>eloftr</code>), a detector-free matcher that finds matches over the whole
+image, texture-poor areas included, to a fraction of a cell. Both give
+the same outputs and go through the same filters and robust estimation.</p>
 <p>The module is a translation to C and OpenCL of the RS_coreg_LoFTR
 workflow (DISK features, AdaLAM matching, control points, thin plate
 spline warp with <em>gdalwarp</em>), made for images that are already roughly
@@ -78,6 +80,35 @@ no mutual nearest neighbour constraint), and the procedure follows
 <em>kornia.feature.match_adalam</em> step by step: on the same keypoints, both
 return the same matches. DISK keypoints have no orientation or scale, so
 AdaLAM's orientation and scale agreement tests do not apply.</p>
+<h3>Efficient LoFTR</h3>
+<p>Efficient LoFTR (Wang et al., 2024) is a detector-free, semi-dense
+matcher in the line of LoFTR (Sun et al., 2021). Both tiles, converted to
+grey (0.2989 R + 0.5870 G + 0.1140 B), go through a RepVGG backbone (Ding
+et al., 2021) whose 3x3, 1x1 and identity branches are folded into single
+3x3 convolutions when the weights are read. Its features at one eighth
+of the resolution are transformed by four layers of self- and
+cross-attention between the two images, computed on tokens aggregated
+over 4x4 cells (with a 2D rotary position encoding in the self-attention).
+Every cell of 8x8 pixels of the image is then matched to the cell of the
+reference with the highest dual-softmax confidence, when that confidence
+exceeds 0.2 and the choice is mutual; the score matrix between all cells
+of the two tiles is processed by blocks of rows, never stored whole.
+Each such match is refined at full resolution, with features fused from
+the coarse, quarter and half resolution levels: first to the best pair
+of pixels between an 8x8 window of the image and a 10x10 window of the
+reference, then to a fraction of a cell in the reference by the
+expectation of a 3x3 correlation. The <code>dist</code> of a match is one minus its
+coarse confidence.</p>
+<p>The weights are those published by the authors, converted by Hugging
+Face (<code>zju-community/efficientloftr</code>, Apache License 2.0, 61 MiB).
+Without <b>checkpoint</b>, <code>model.safetensors</code> is looked for in
+<b>weights_dir</b> (by default <code>$ELOFTR_MODELS_DIR</code>, or <code>~/models/eloftr</code>)
+and downloaded there when missing, unless <b>-o</b> is given. Tile sides
+are rounded up to multiples of 32 cells. AdaLAM and the options of the
+DISK and AdaLAM sections do not apply. On the same tile, the coarse
+matches are those of the authors' code, and the fine positions agree
+with it within 1e-4 cell (99 % within 1e-6), but for float ties in the
+first fine stage (see <code>tests/reference_compare_eloftr.py</code>).</p>
 <h3>Filters and refinement</h3>
 <p>Images of different dates show objects that moved: a vehicle, an
 aircraft or a ship gives matches that agree with each other but not with
@@ -85,7 +116,11 @@ the ground. <b>max_shift</b> drops matches whose shift exceeds that
 distance (in map units), and <b>tolerance</b> those whose shift differs
 from the median shift of their tile by more than that along either axis.</p>
 <p>DISK keypoints lie on cell centres, so control points are only as
-precise as one cell. With <b>-s</b>, each match is refined in the reference
+precise as one cell. Efficient LoFTR refines its matches to a fraction
+of a cell, but on aerial basemaps its estimate leans towards whole
+cells (median error 0.3-0.4 cell on synthetic sub-cell shifts, against
+0.1-0.2 cell with <b>-s</b>): use <b>-s</b> with both matchers. With <b>-s</b>,
+each match is refined in the reference
 to a fraction of a cell: the 15x15-cell grey window of the image around
 the keypoint is correlated (normalized cross-correlation) with reference
 windows shifted by up to two cells, and the peak is fitted by a parabola
@@ -122,7 +157,7 @@ Barath and Matas, 2018; graph construction after Kolmogorov and Zabih,
 2004, maximum flow by Dinic, 1970), so that a coherent cluster is kept
 or rejected together.</li>
 <li><code>superansac</code> combines them: samples drawn first among the best-ranked
-matches (PROSAC, Chum and Matas, 2005, by AdaLAM's confidence),
+matches (PROSAC, Chum and Matas, 2005, by the matcher's confidence),
 MAGSAC++ quality, graph-cut local optimization, final weighted least
 squares.</li>
 </ul>
@@ -169,7 +204,8 @@ positions, with the attribute columns:</p>
 <li><code>ref_east</code>, <code>ref_north</code>: position in the reference;</li>
 <li><code>dx</code>, <code>dy</code>, <code>shift</code>: shift from the image to the reference, in map
 units;</li>
-<li><code>dist</code>: AdaLAM inverse confidence of the neighbourhood (lower is
+<li><code>dist</code>: AdaLAM inverse confidence of the neighbourhood with <code>disk</code>,
+one minus the coarse matching confidence with <code>eloftr</code> (lower is
 better);</li>
 <li><code>tile</code>: tile of the match;</li>
 <li><code>refined</code>: 1 when refined to a fraction of a cell (<b>-s</b>);</li>
@@ -201,12 +237,20 @@ took about four seconds for both images, matching included (25 tiles in
 longer, while the driver compiles the kernels; it keeps them in its
 cache afterwards. With <b>--verbose</b>, the time spent on the device and
 in matching is reported at the end.</p>
+<p>Efficient LoFTR took about two seconds per 1024 x 1024 tile on the same
+GPU, and its matching on the host is almost free (25 tiles in about
+1 min 5 s, 1 min 25 s with <b>-s</b>), for 15 to 20 times as many control
+points as DISK, spread over the whole tile. It needs about 2 GiB of
+device memory for 1024-cell tiles.</p>
 <h3>Debugging aids</h3>
 <p>With the environment variable <code>I_COREGISTRATION_OPENCL_DUMP</code> set to a
 folder, each tile's DISK inputs, keypoints with their scores and
 descriptors, and AdaLAM matches are written there;
 <code>tests/reference_compare.py</code> compares them with <em>kornia</em> in a Python
-environment with PyTorch. With <code>I_COREGISTRATION_OPENCL_PROFILE</code> set,
+environment with PyTorch. With <code>eloftr</code>, the grey inputs, the backbone,
+transformer and fine features and the matches are written, and
+<code>tests/reference_compare_eloftr.py</code> compares them stage by stage with
+<em>transformers</em>. With <code>I_COREGISTRATION_OPENCL_PROFILE</code> set,
 every OpenCL kernel is timed and the totals per kernel are reported at
 the end (this slows the run down).</p>
 <h2>EXAMPLES</h2>
@@ -222,6 +266,11 @@ g.region raster=esri.1 -p
 i.coregistration.opencl group=google reference=esri points=gcp_google \
     -s max_shift=5 tolerance=2
 i.rectify -t group=google extension=_coreg method=linear -c</pre></div>
+<h3>Dense control points with Efficient LoFTR</h3>
+<p>The same pair with Efficient LoFTR, which also finds control points on
+tarmac, bare soil and other texture-poor areas, refined with <b>-s</b>:</p>
+<div class="code"><pre>i.coregistration.opencl group=google reference=esri points=gcp_google \
+    matcher=eloftr -s</pre></div>
 <h3>Hyperspectral scene to a very high resolution reference</h3>
 <p>Match a hyperspectral scene (three bands near red, green and blue)
 against a WorldView-3 pansharpened RGB image, on the reference grid,
@@ -249,6 +298,10 @@ ECCV 2020, Lecture Notes in Computer Science 12364, Springer, 770-787.
 <p>Chum, O., Matas, J., 2005. Matching with PROSAC - progressive sample
 consensus. In: Proceedings of the IEEE Computer Society Conference on
 Computer Vision and Pattern Recognition (CVPR), vol. 1, 220-226.</p>
+<p>Ding, X., Zhang, X., Ma, N., Han, J., Ding, G., Sun, J., 2021. RepVGG:
+making VGG-style ConvNets great again. In: Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition (CVPR),
+13733-13742.</p>
 <p>Dinic, E. A., 1970. Algorithm for solution of a problem of maximum flow
 in networks with power estimation. Soviet Mathematics Doklady 11,
 1277-1280.</p>
@@ -265,9 +318,17 @@ Intelligence 26 (2), 147-159.</p>
 Kornia: an open source differentiable computer vision library for
 PyTorch. In: Proceedings of the IEEE/CVF Winter Conference on
 Applications of Computer Vision (WACV), 3674-3683.</p>
+<p>Sun, J., Shen, Z., Wang, Y., Bao, H., Zhou, X., 2021. LoFTR:
+detector-free local feature matching with transformers. In: Proceedings
+of the IEEE/CVF Conference on Computer Vision and Pattern Recognition
+(CVPR), 8922-8931.</p>
 <p>Tyszkiewicz, M. J., Fua, P., Trulls, E., 2020. DISK: learning local
 features with policy gradient. In: Advances in Neural Information
 Processing Systems 33 (NeurIPS 2020), 14254-14265.</p>
+<p>Wang, Y., He, X., Peng, S., Tan, D., Zhou, X., 2024. Efficient LoFTR:
+semi-dense local feature matching with sparse-like speed. In:
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), 21666-21675.</p>
 <h2>SEE ALSO</h2>
 <p><em><a href="i.group.html">i.group</a>, <a href="i.ortho.photo.html">i.ortho.photo</a>,
 <a href="i.rectify.html">i.rectify</a>, <a href="m.transform.html">m.transform</a>,

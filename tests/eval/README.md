@@ -199,3 +199,75 @@ Conclusions:
   points where the distortion is local: keep it for smooth cases.
 - The estimation adds no measurable time: the matching stage stays
   within its run-to-run variation (about a second per 9 or 25 tiles).
+
+## Phase 2: Efficient LoFTR (2026-10-14)
+
+Same data as phase 1, `matcher=eloftr` with the default estimator
+(superansac, threshold 3 cells), without and with `-s`; the DISK rows
+are phase 1's (`-s`, superansac). Synthetic pairs, errors in cells:
+
+| scenario | matcher | active | median error | p90 error | within 1 cell | coverage | object leaks | wall s |
+|---|---|---|---|---|---|---|---|---|
+| translation | disk -s | 4160 | 0.178 | 0.308 | 99.95 % | 82 % | 0 | 69.9 |
+| translation | eloftr | 68185 | 0.391 | 0.458 | 99.51 % | 100 % | 0 | 22.0 |
+| translation | eloftr -s | 67795 | 0.181 | 0.367 | 99.79 % | 100 % | 0 | 31.1 |
+| affine | disk -s | 5239 | 0.116 | 0.253 | 99.98 % | 84 % | 0 | 38.3 |
+| affine | eloftr | 71438 | 0.34 | 0.566 | 99.53 % | 100 % | 0 | 21.8 |
+| affine | eloftr -s | 71175 | 0.134 | 0.345 | 99.74 % | 100 % | 0 | 30.3 |
+| smooth | disk -s | 6642 | 0.12 | 0.244 | 99.95 % | 84 % | 0 | 45.6 |
+| smooth | eloftr | 74835 | 0.3 | 0.538 | 99.81 % | 100 % | 0 | 22.1 |
+| smooth | eloftr -s | 74729 | 0.127 | 0.31 | 99.86 % | 100 % | 0 | 29.5 |
+| objects | disk -s | 6482 | 0.064 | 0.199 | 99.65 % | 82 % | 7 | 42.5 |
+| objects | eloftr | 66011 | 0.434 | 0.498 | 97.42 % | 100 % | 12 | 22.1 |
+| objects | eloftr -s | 65848 | 0.089 | 0.296 | 99.54 % | 100 % | 16 | 30.9 |
+| radiometric | disk -s | 6035 | 0.273 | 0.544 | 98.49 % | 82 % | 0 | 46.1 |
+| radiometric | eloftr | 73560 | 0.63 | 0.833 | 95.50 % | 100 % | 0 | 22.0 |
+| radiometric | eloftr -s | 72958 | 0.4 | 0.762 | 95.55 % | 100 % | 0 | 30.8 |
+
+Real basemaps, metres:
+
+| pair | matcher | active | inactive | median shift E, N | LOO order 1 median, p90 | wall s |
+|---|---|---|---|---|---|---|
+| esri -> google | disk -s | 12536 | 3621 | 0.318, 0.469 | 0.385, 1.102 | 107 |
+| esri -> google | eloftr | 233814 | 23791 | 0.049, 0.5 | 0.339, 0.824 | 63 |
+| esri -> google | eloftr -s | 232210 | 24052 | 0.188, 0.497 | 0.338, 0.868 | 83 |
+| google -> bing | disk -s | 15638 | 1944 | -0.023, -0.051 | 0.237, 0.869 | 129 |
+| google -> bing | eloftr | 262897 | 19610 | -0.003, -0.009 | 0.079, 0.56 | 64 |
+| google -> bing | eloftr -s | 261708 | 19762 | -0.007, -0.033 | 0.146, 0.589 | 86 |
+| bing -> esri | disk -s | 11590 | 4234 | -0.116, -0.444 | 0.441, 1.2 | 105 |
+| bing -> esri | eloftr | 223866 | 31394 | -0.025, -0.492 | 0.36, 0.755 | 63 |
+| bing -> esri | eloftr -s | 221786 | 31935 | -0.122, -0.48 | 0.327, 0.82 | 82 |
+
+Loop closure ESRI -> Google -> Bing -> ESRI (median, 90th percentile,
+metres): disk -s 0.154, 0.384 over 180 of 256 blocks; eloftr 0.026,
+0.445 over 256; eloftr -s 0.066, 0.273 over 256.
+
+Conclusions:
+
+- The translation is faithful: on one Google/ESRI tile of 1024 cells,
+  the same 14009 coarse matches as the authors' code (through
+  Transformers' network), fine positions within 6e-5 pixel but for 3
+  float ties (`tests/reference_compare_eloftr.py`). Transformers 4.57
+  itself departs from the authors' fine matching (scale of the first
+  stage; its first stage always returns window position 0); the module
+  follows the authors.
+- ELoFTR's own sub-cell estimate leans to whole cells on these images:
+  on the translation (3.3, -2.7) its median shift is (3.03, -2.98). The
+  second stage moves the points by about 0.1 pixel where 0.3 is needed;
+  centring its 3 x 3 window on the chosen pixel (instead of the
+  authors' indexing, one pixel up-left) makes it worse, so this is the
+  weights' behaviour, not a translation error. The near-integer shifts
+  also make the loop closure of ELoFTR without `-s` look better than it
+  is. With `-s` the errors come down to those of DISK (0.09-0.18 cell
+  median), radiometric changes excepted (0.40 against 0.27).
+- 13-18 times as many control points, over all of every tile (coverage
+  100 % against 82-84 %; loop closure on all 256 blocks against 180),
+  and on real basemaps a lower leave-one-out 90th percentile (0.59-0.87 m
+  against 0.87-1.20 m).
+- Moved objects: superansac keeps 12-16 leaks out of about 7000 object
+  matches (DISK: 7 out of about 1500).
+- Speed: the device stage is about 2 s per 1024 tile, the host matching
+  almost free (no AdaLAM): 63-86 s wall per basemap pair against
+  105-129 s for DISK. The 3x3 convolutions now run as im2col + GEMM
+  (16.2 s to 2.1 s per tile; bit-identical results); DISK still uses its
+  conv5x5 kernel.

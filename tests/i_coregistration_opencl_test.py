@@ -92,6 +92,33 @@ def test_recovers_known_shift(session, checkpoint, platform):
     assert found["name"].strip("'") == "POINTS"
 
 
+def test_eloftr_recovers_known_shift(session, eloftr_weights, platform):
+    """Efficient LoFTR gives the known shift to a fraction of a cell
+    without -s, from its own fine matching."""
+    tools = Tools(session=session)
+    tools.i_coregistration_opencl(
+        group="img",
+        reference="ref",
+        matcher="eloftr",
+        checkpoint=eloftr_weights,
+        points="gcp_eloftr",
+        tile_size=256,
+        platform=platform,
+    )
+    rows = gs.vector_db_select("gcp_eloftr", columns="dx,dy", env=session.env)[
+        "values"
+    ]
+    assert len(rows) >= 100
+    dx = [float(r[0]) for r in rows.values()]
+    dy = [float(r[1]) for r in rows.values()]
+    assert statistics.median(dx) == pytest.approx(SHIFT_X, abs=0.1)
+    assert statistics.median(dy) == pytest.approx(-SHIFT_Y, abs=0.1)
+    close = sum(
+        math.hypot(x - SHIFT_X, y + SHIFT_Y) < 0.5 for x, y in zip(dx, dy)
+    )
+    assert close >= 0.9 * len(dx)
+
+
 def test_estimator_rejects_moved_object(session, checkpoint, platform):
     """Matches on a patch that moved MOVE cells pass AdaLAM; the robust
     estimation per tile makes them inactive and keeps the ground."""

@@ -23,6 +23,10 @@ struct ops {
     cl_kernel gemm, gemm_big, conv5x5, conv2d, chan_stats, chan_affine, prelu,
         act_map, layernorm, softmax_rows, attention, rope, resize_bilinear,
         grid_sample, unfold, avgpool2, pool2d, transpose2d, axpby;
+    /* Work buffer of the im2col convolutions, grown on demand up to
+     * im2col_bytes (256 MiB by default) per block of output positions. */
+    cl_mem scratch;
+    size_t scratch_bytes, im2col_bytes;
 };
 
 /* One GEMM operand: buffer, element offset, leading dimension and the
@@ -80,7 +84,9 @@ int ops_conv_out(int n, int k, int s, int p, int d);
 /* General convolution of in (C, H, W) into out (K, Ho, Wo), Ho and Wo
  * from the geometry. mean/rstd/alpha (NULL for none) normalize and gate
  * the input as in DISK; the 5x5 / stride 1 / padding 2 / one group case
- * runs the tiled conv5x5 kernel. */
+ * runs the tiled conv5x5 kernel, other one-group convolutions without
+ * normalization im2col and GEMM by blocks of output positions, the rest
+ * the direct conv2d kernel. */
 void ops_conv2d(struct ops *o, cl_mem in, int C, int H, int W, cl_mem w,
                 cl_mem b, int K, const struct conv_geom *g, cl_mem mean,
                 cl_mem rstd, cl_mem alpha, int act, float slope, cl_mem out);

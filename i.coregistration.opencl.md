@@ -12,9 +12,11 @@ makes the remaining outliers (objects that moved between the images,
 mismatches) inactive control points. Neither Python nor PyTorch is
 needed at run time.
 
-The matching method is chosen with **matcher**. DISK with AdaLAM
-(`disk`) is the only one so far; detector-free and dense matchers will
-be added as further choices, with the same outputs.
+The matching method is chosen with **matcher**: DISK keypoints matched
+and filtered by AdaLAM (`disk`, the default), or Efficient LoFTR
+(`eloftr`), a detector-free matcher that finds matches over the whole
+image, texture-poor areas included, to a fraction of a cell. Both give
+the same outputs and go through the same filters and robust estimation.
 
 The module is a translation to C and OpenCL of the RS_coreg_LoFTR
 workflow (DISK features, AdaLAM matching, control points, thin plate
@@ -90,6 +92,38 @@ no mutual nearest neighbour constraint), and the procedure follows
 return the same matches. DISK keypoints have no orientation or scale, so
 AdaLAM's orientation and scale agreement tests do not apply.
 
+### Efficient LoFTR
+
+Efficient LoFTR (Wang et al., 2024) is a detector-free, semi-dense
+matcher in the line of LoFTR (Sun et al., 2021). Both tiles, converted to
+grey (0.2989 R + 0.5870 G + 0.1140 B), go through a RepVGG backbone (Ding
+et al., 2021) whose 3x3, 1x1 and identity branches are folded into single
+3x3 convolutions when the weights are read. Its features at one eighth
+of the resolution are transformed by four layers of self- and
+cross-attention between the two images, computed on tokens aggregated
+over 4x4 cells (with a 2D rotary position encoding in the self-attention).
+Every cell of 8x8 pixels of the image is then matched to the cell of the
+reference with the highest dual-softmax confidence, when that confidence
+exceeds 0.2 and the choice is mutual; the score matrix between all cells
+of the two tiles is processed by blocks of rows, never stored whole.
+Each such match is refined at full resolution, with features fused from
+the coarse, quarter and half resolution levels: first to the best pair
+of pixels between an 8x8 window of the image and a 10x10 window of the
+reference, then to a fraction of a cell in the reference by the
+expectation of a 3x3 correlation. The `dist` of a match is one minus its
+coarse confidence.
+
+The weights are those published by the authors, converted by Hugging
+Face (`zju-community/efficientloftr`, Apache License 2.0, 61 MiB).
+Without **checkpoint**, `model.safetensors` is looked for in
+**weights_dir** (by default `$ELOFTR_MODELS_DIR`, or `~/models/eloftr`)
+and downloaded there when missing, unless **-o** is given. Tile sides
+are rounded up to multiples of 32 cells. AdaLAM and the options of the
+DISK and AdaLAM sections do not apply. On the same tile, the coarse
+matches are those of the authors' code, and the fine positions agree
+with it within 1e-4 cell (99 % within 1e-6), but for float ties in the
+first fine stage (see `tests/reference_compare_eloftr.py`).
+
 ### Filters and refinement
 
 Images of different dates show objects that moved: a vehicle, an
@@ -99,7 +133,11 @@ distance (in map units), and **tolerance** those whose shift differs
 from the median shift of their tile by more than that along either axis.
 
 DISK keypoints lie on cell centres, so control points are only as
-precise as one cell. With **-s**, each match is refined in the reference
+precise as one cell. Efficient LoFTR refines its matches to a fraction
+of a cell, but on aerial basemaps its estimate leans towards whole
+cells (median error 0.3-0.4 cell on synthetic sub-cell shifts, against
+0.1-0.2 cell with **-s**): use **-s** with both matchers. With **-s**,
+each match is refined in the reference
 to a fraction of a cell: the 15x15-cell grey window of the image around
 the keypoint is correlated (normalized cross-correlation) with reference
 windows shifted by up to two cells, and the peak is fitted by a parabola
@@ -139,7 +177,7 @@ every match active (the behaviour of the RS_coreg_LoFTR workflow).
   2004, maximum flow by Dinic, 1970), so that a coherent cluster is kept
   or rejected together.
 - `superansac` combines them: samples drawn first among the best-ranked
-  matches (PROSAC, Chum and Matas, 2005, by AdaLAM's confidence),
+  matches (PROSAC, Chum and Matas, 2005, by the matcher's confidence),
   MAGSAC++ quality, graph-cut local optimization, final weighted least
   squares.
 
@@ -191,7 +229,8 @@ positions, with the attribute columns:
 - `ref_east`, `ref_north`: position in the reference;
 - `dx`, `dy`, `shift`: shift from the image to the reference, in map
   units;
-- `dist`: AdaLAM inverse confidence of the neighbourhood (lower is
+- `dist`: AdaLAM inverse confidence of the neighbourhood with `disk`,
+  one minus the coarse matching confidence with `eloftr` (lower is
   better);
 - `tile`: tile of the match;
 - `refined`: 1 when refined to a fraction of a cell (**-s**);
@@ -230,13 +269,22 @@ longer, while the driver compiles the kernels; it keeps them in its
 cache afterwards. With **--verbose**, the time spent on the device and
 in matching is reported at the end.
 
+Efficient LoFTR took about two seconds per 1024 x 1024 tile on the same
+GPU, and its matching on the host is almost free (25 tiles in about
+1 min 5 s, 1 min 25 s with **-s**), for 15 to 20 times as many control
+points as DISK, spread over the whole tile. It needs about 2 GiB of
+device memory for 1024-cell tiles.
+
 ### Debugging aids
 
 With the environment variable `I_COREGISTRATION_OPENCL_DUMP` set to a
 folder, each tile's DISK inputs, keypoints with their scores and
 descriptors, and AdaLAM matches are written there;
 `tests/reference_compare.py` compares them with *kornia* in a Python
-environment with PyTorch. With `I_COREGISTRATION_OPENCL_PROFILE` set,
+environment with PyTorch. With `eloftr`, the grey inputs, the backbone,
+transformer and fine features and the matches are written, and
+`tests/reference_compare_eloftr.py` compares them stage by stage with
+*transformers*. With `I_COREGISTRATION_OPENCL_PROFILE` set,
 every OpenCL kernel is timed and the totals per kernel are reported at
 the end (this slows the run down).
 
@@ -257,6 +305,16 @@ g.region raster=esri.1 -p
 i.coregistration.opencl group=google reference=esri points=gcp_google \
     -s max_shift=5 tolerance=2
 i.rectify -t group=google extension=_coreg method=linear -c
+```
+
+### Dense control points with Efficient LoFTR
+
+The same pair with Efficient LoFTR, which also finds control points on
+tarmac, bare soil and other texture-poor areas, refined with **-s**:
+
+```sh
+i.coregistration.opencl group=google reference=esri points=gcp_google \
+    matcher=eloftr -s
 ```
 
 ### Hyperspectral scene to a very high resolution reference
@@ -296,6 +354,11 @@ Chum, O., Matas, J., 2005. Matching with PROSAC - progressive sample
 consensus. In: Proceedings of the IEEE Computer Society Conference on
 Computer Vision and Pattern Recognition (CVPR), vol. 1, 220-226.
 
+Ding, X., Zhang, X., Ma, N., Han, J., Ding, G., Sun, J., 2021. RepVGG:
+making VGG-style ConvNets great again. In: Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition (CVPR),
+13733-13742.
+
 Dinic, E. A., 1970. Algorithm for solution of a problem of maximum flow
 in networks with power estimation. Soviet Mathematics Doklady 11,
 1277-1280.
@@ -317,9 +380,19 @@ Kornia: an open source differentiable computer vision library for
 PyTorch. In: Proceedings of the IEEE/CVF Winter Conference on
 Applications of Computer Vision (WACV), 3674-3683.
 
+Sun, J., Shen, Z., Wang, Y., Bao, H., Zhou, X., 2021. LoFTR:
+detector-free local feature matching with transformers. In: Proceedings
+of the IEEE/CVF Conference on Computer Vision and Pattern Recognition
+(CVPR), 8922-8931.
+
 Tyszkiewicz, M. J., Fua, P., Trulls, E., 2020. DISK: learning local
 features with policy gradient. In: Advances in Neural Information
 Processing Systems 33 (NeurIPS 2020), 14254-14265.
+
+Wang, Y., He, X., Peng, S., Tan, D., Zhou, X., 2024. Efficient LoFTR:
+semi-dense local feature matching with sparse-like speed. In:
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), 21666-21675.
 
 ## SEE ALSO
 

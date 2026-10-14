@@ -50,9 +50,17 @@ state, how to build, test and run, and what is still to be decided.
   the default: decisions follow long-term addon use, not one report;
   `estimator=none` reproduces v0 (and the reference comparison).
 
+- Phase 2 done (2026-10-14): `matcher=eloftr` (Efficient LoFTR,
+  Hugging Face safetensors weights in `~/models/eloftr` on both
+  machines), im2col convolutions, `tests/reference_compare_eloftr.py`
+  (run with the repository's `venv_ref`: torch 2.6 + transformers
+  4.57), eval in `tests/eval/README.md` (use `-s` with eloftr).
+  `I_COREGISTRATION_OPENCL_ELOFTR=<model.safetensors>` enables its
+  pytest. Open question for the user: default matcher (disk or eloftr).
+
 ## Next step
 
-PLAN.md phase 2 (Efficient LoFTR). Ask the user about the four
+PLAN.md phase 3 (MatchAnything). Ask the user about the four
 decisions at the end of PLAN.md before phases 3-4 (DINOv3 licence for
 RoMa v2; download of ELoFTR/MatchAnything weights; MatchAnything in the
 published addon or not; order). Their answers are not known yet.
@@ -68,6 +76,7 @@ published addon or not; order). Their answers are not known yet.
   to `<b>`, code blocks to `<div class="code"><pre>`, `.md` links to
   `.html`); `make` fails without the `.html`.
 - Tests: `I_COREGISTRATION_OPENCL_CHECKPOINT=~/models/disk/depth-save.pth
+  I_COREGISTRATION_OPENCL_ELOFTR=~/models/eloftr/model.safetensors
   grass --tmp-project XY --exec python3 -m pytest tests`. To test a
   build that is not installed (the server builds), also set
   `I_COREGISTRATION_OPENCL_BINDIR=<build>/bin`: the GRASS session puts the

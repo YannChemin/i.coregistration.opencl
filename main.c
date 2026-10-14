@@ -26,11 +26,13 @@
 #include "adalam.h"
 #include "disk.h"
 #include "download.h"
+#include "eloftr.h"
 #include "estimate.h"
 #include "gcp.h"
 #include "image.h"
 #include "matcher.h"
 #include "matcher_disk.h"
+#include "matcher_eloftr.h"
 #include "ocl_backend.h"
 #include "ops.h"
 #include "progress.h"
@@ -40,21 +42,27 @@
 #define DOWNLOAD_URL "https://raw.githubusercontent.com/cvlab-epfl/disk/master"
 #define CHECKPOINT_SIZE 4375832LL
 
+/* Efficient LoFTR outdoor weights converted by Hugging Face (Apache 2.0). */
+#define ELOFTR_URL                                                             \
+    "https://huggingface.co/zju-community/efficientloftr/resolve/main/"       \
+    "model.safetensors"
+#define ELOFTR_SIZE 64263488LL
+
 /* Refinement windows, in cells: correlation radius and search. */
 #define REFINE_RADIUS 7
 #define REFINE_SEARCH 2
 
-/* The central folder of DISK checkpoints: $DISK_MODELS_DIR, by default
- * ~/models/disk. */
-static char *default_weights_dir(void)
+/* The central folder of a matcher's weights: $<NAME>_MODELS_DIR, by
+ * default ~/models/<name> (DISK_MODELS_DIR, ~/models/disk; ...). */
+static char *default_weights_dir(const char *env, const char *name)
 {
-    const char *base = getenv("DISK_MODELS_DIR");
+    const char *base = getenv(env);
     char *dir;
 
     if (base && *base)
         dir = G_store(base);
     else
-        G_asprintf(&dir, "%s/models/disk", G_home());
+        G_asprintf(&dir, "%s/models/%s", G_home(), name);
     return dir;
 }
 
@@ -116,7 +124,7 @@ int main(int argc, char *argv[])
             *device, *platform;
     } opt;
     struct {
-        struct Flag *mnn, *refine, *dry, *offline;
+        struct Flag *mnn, *raw, *refine, *dry, *offline;
     } flag;
     struct Cell_head win;
     struct rgb_image src, ref;
@@ -130,7 +138,7 @@ int main(int argc, char *argv[])
     struct gcp_list gl = {0, 0, NULL};
     char *ckpt = NULL;
     int stretch = 0, tile, overlap, step, nfeat, ntx, nty, tx, ty, t = 0;
-    int nactive, i;
+    int nactive, i, is_eloftr;
     int H, W, multiple, nraw = 0, nshift = 0, ntol = 0, nref = 0;
     double lo = 0, hi = 100, max_shift = 0, tol = 0, threshold = 0;
     int est_kind, tile_type, region_type, nkept = 0, nfail = 0;
@@ -151,8 +159,9 @@ int main(int argc, char *argv[])
     G_add_keyword(_("GPU"));
     module->description =
         _("Finds control points between an imagery group and a reference "
-          "group with DISK local features matched and filtered by AdaLAM, on "
-          "an OpenCL device, and writes them to the group for i.rectify.");
+          "group with Efficient LoFTR or DISK and AdaLAM on an OpenCL device, "
+          "refines them to a fraction of a cell, and writes them to the group "
+          "for i.rectify.");
 
     opt.group = G_define_standard_option(G_OPT_I_GROUP);
     opt.group->description =
@@ -185,28 +194,31 @@ int main(int argc, char *argv[])
     opt.matcher = G_define_option();
     opt.matcher->key = "matcher";
     opt.matcher->type = TYPE_STRING;
-    opt.matcher->options = "disk";
-    opt.matcher->answer = "disk";
+    opt.matcher->options = "disk,eloftr";
+    opt.matcher->answer = "eloftr";
     opt.matcher->description = _("Matching method");
-    G_asprintf((char **)&opt.matcher->descriptions, "disk;%s",
+    G_asprintf((char **)&opt.matcher->descriptions, "disk;%s;eloftr;%s",
                _("DISK keypoints matched and filtered by AdaLAM, on whole "
-                 "cells (refined with -s)"));
+                 "cells"),
+               _("Efficient LoFTR: detector-free semi-dense matches to a "
+                 "fraction of a cell"));
     opt.matcher->guisection = _("Model");
 
     opt.checkpoint = G_define_standard_option(G_OPT_F_INPUT);
     opt.checkpoint->key = "checkpoint";
     opt.checkpoint->required = NO;
     opt.checkpoint->description =
-        _("DISK checkpoint (depth-save.pth or epipolar-save.pth); default: "
-          "the one of model= in weights_dir=, downloaded if missing");
+        _("Weights of the matcher (DISK: depth-save.pth or "
+          "epipolar-save.pth; eloftr: model.safetensors); default: in "
+          "weights_dir=, downloaded if missing");
     opt.checkpoint->guisection = _("Model");
 
     opt.weights_dir = G_define_standard_option(G_OPT_M_DIR);
     opt.weights_dir->key = "weights_dir";
     opt.weights_dir->required = NO;
     opt.weights_dir->description =
-        _("Folder of DISK checkpoints (default: $DISK_MODELS_DIR or "
-          "~/models/disk)");
+        _("Folder of the matcher's weights (default: $DISK_MODELS_DIR or "
+          "~/models/disk, $ELOFTR_MODELS_DIR or ~/models/eloftr)");
     opt.weights_dir->guisection = _("Model");
 
     opt.model = G_define_option();
@@ -383,11 +395,18 @@ int main(int argc, char *argv[])
         _("AdaLAM: take seeds only among mutual nearest neighbours");
     flag.mnn->guisection = _("AdaLAM");
 
+    flag.raw = G_define_flag();
+    flag.raw->key = 'r';
+    flag.raw->description =
+        _("Keep the matched positions: no sub-cell refinement by normalized "
+          "cross-correlation");
+    flag.raw->guisection = _("Filter");
+
+    /* Refinement became the default; -s is kept for existing scripts. */
     flag.refine = G_define_flag();
     flag.refine->key = 's';
     flag.refine->description =
-        _("Refine matches to a fraction of a cell by normalized "
-          "cross-correlation");
+        _("Deprecated: the sub-cell refinement is the default (-r skips it)");
     flag.refine->guisection = _("Filter");
 
     flag.dry = G_define_flag();
@@ -405,6 +424,11 @@ int main(int argc, char *argv[])
     if (G_parser(argc, argv))
         exit(EXIT_FAILURE);
 
+    if (flag.raw->answer && flag.refine->answer)
+        G_fatal_error(_("-r and -s contradict each other"));
+    if (flag.refine->answer)
+        G_warning(_("-s is deprecated: the sub-cell refinement is the "
+                    "default"));
     if (flag.dry->answer && !opt.points->answer)
         G_fatal_error(_("With -n, give points= or nothing is written"));
     if (opt.percentile->answer) {
@@ -416,8 +440,8 @@ int main(int argc, char *argv[])
             G_fatal_error(_("percentile= must satisfy 0 <= low < high <= 100"));
         stretch = 1;
     }
-    /* Only DISK so far (matcher= has one choice). */
-    multiple = DISK_MULTIPLE;
+    is_eloftr = strcmp(opt.matcher->answer, "eloftr") == 0;
+    multiple = is_eloftr ? ELOFTR_MULTIPLE : DISK_MULTIPLE;
     tile = atoi(opt.tile_size->answer);
     tile = (tile + multiple - 1) / multiple * multiple;
     overlap = atoi(opt.tile_overlap->answer);
@@ -457,22 +481,33 @@ int main(int argc, char *argv[])
             G_fatal_error(_("Checkpoint <%s> not found"), ckpt);
     }
     else {
-        char *dir = opt.weights_dir->answer ? G_store(opt.weights_dir->answer)
-                                            : default_weights_dir();
+        char *dir, *url;
 
-        G_asprintf(&ckpt, "%s/%s-save.pth", dir, opt.model->answer);
+        if (opt.weights_dir->answer)
+            dir = G_store(opt.weights_dir->answer);
+        else if (is_eloftr)
+            dir = default_weights_dir("ELOFTR_MODELS_DIR", "eloftr");
+        else
+            dir = default_weights_dir("DISK_MODELS_DIR", "disk");
+        if (is_eloftr) {
+            G_asprintf(&ckpt, "%s/model.safetensors", dir);
+            url = G_store(ELOFTR_URL);
+        }
+        else {
+            G_asprintf(&ckpt, "%s/%s-save.pth", dir, opt.model->answer);
+            G_asprintf(&url, "%s/%s-save.pth", DOWNLOAD_URL,
+                       opt.model->answer);
+        }
         if (!file_exists(ckpt)) {
-            char *url;
-
             if (flag.offline->answer)
                 G_fatal_error(_("Checkpoint <%s> not found and -o given"),
                               ckpt);
-            G_asprintf(&url, "%s/%s-save.pth", DOWNLOAD_URL,
-                       opt.model->answer);
-            G_message(_("Downloading DISK weights <%s>..."), url);
-            download_file(url, ckpt, CHECKPOINT_SIZE);
-            G_free(url);
+            G_message(_("Downloading <%s> weights <%s>..."),
+                      opt.matcher->answer, url);
+            download_file(url, ckpt,
+                          is_eloftr ? ELOFTR_SIZE : CHECKPOINT_SIZE);
         }
+        G_free(url);
         G_free(dir);
     }
 
@@ -493,7 +528,8 @@ int main(int argc, char *argv[])
     ntx = win.cols <= tile ? 1 : 1 + (win.cols - tile + step - 1) / step;
     nty = win.rows <= tile ? 1 : 1 + (win.rows - tile + step - 1) / step;
     progress_plan(PG_READ, 2.0 * win.rows * win.cols / 1e6);
-    progress_plan(PG_LOAD, CHECKPOINT_SIZE / 1073741824.0);
+    progress_plan(PG_LOAD,
+                  (is_eloftr ? ELOFTR_SIZE : CHECKPOINT_SIZE) / 1073741824.0);
     progress_plan(PG_BUILD, 1);
     progress_plan(PG_TILE, ntx * nty);
     progress_plan(PG_MATCH, ntx * nty);
@@ -509,8 +545,15 @@ int main(int argc, char *argv[])
     ops_init(&ops, &ocl);
     progress_end();
     pth_open(&pf, ckpt);
-    matcher_disk_create(&matcher, &ops, &pf, &dcfg);
+    if (is_eloftr)
+        matcher_eloftr_create(&matcher, &ops, &pf);
+    else
+        matcher_disk_create(&matcher, &ops, &pf, &dcfg);
     pth_close(&pf);
+    dump = getenv("I_COREGISTRATION_OPENCL_DUMP");
+    if (dump && !*dump)
+        dump = NULL;
+    matcher.dump_dir = dump;
 
     H = win.rows < tile ? (win.rows + multiple - 1) / multiple * multiple
                         : tile;
@@ -524,9 +567,6 @@ int main(int argc, char *argv[])
 
     G_message(_("Matching %d tile(s) of %d x %d cells with <%s>..."), ntx * nty,
               tile, tile, matcher.name);
-    dump = getenv("I_COREGISTRATION_OPENCL_DUMP");
-    if (dump && !*dump)
-        dump = NULL;
     for (ty = 0; ty < nty; ty++)
         for (tx = 0; tx < ntx; tx++) {
             int x0 = tx * step, y0 = ty * step, w, h, nm, i;
@@ -616,7 +656,7 @@ int main(int argc, char *argv[])
                 G_free(ddx);
                 G_free(ddy);
             }
-            if (flag.refine->answer)
+            if (!flag.raw->answer)
                 for (i = first; i < gl.n; i++)
                     nref += gcp_refine(&gl.v[i], &src, &ref, REFINE_RADIUS,
                                        REFINE_SEARCH);
@@ -650,9 +690,9 @@ int main(int argc, char *argv[])
     {
         int before = gl.n;
 
-        G_message(_("%d AdaLAM matches; %d dropped by max_shift=, %d by "
+        G_message(_("%d matches (%s); %d dropped by max_shift=, %d by "
                     "tolerance=; %d refined"),
-                  nraw, nshift, ntol, nref);
+                  nraw, opt.matcher->answer, nshift, ntol, nref);
         if (est_kind != ROBUST_NONE) {
             G_message(_("Per tile (%s, %s model, threshold %g): %d of %d "
                         "matches kept"),
