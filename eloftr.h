@@ -6,20 +6,20 @@
 #include "ops.h"
 #include "pth_loader.h"
 
-#define ELOFTR_MULTIPLE 32 /* Tile sides: 1/8 features, aggregated by 4. */
-#define ELOFTR_DIM 256     /* Coarse feature dimension. */
-#define ELOFTR_FINE_DIM 64 /* Fine feature dimension. */
-#define ELOFTR_BLOCKS 21   /* RepVGG blocks: 1 + 2 + 4 + 14. */
-#define ELOFTR_LAYERS 4    /* Transformer layers (self + cross each). */
+#define ELOFTR_MULTIPLE 32   /* Tile sides: 1/8 features, aggregated by 4. */
+#define ELOFTR_DIM 256       /* Coarse feature dimension. */
+#define ELOFTR_FINE_DIM 64   /* Fine feature dimension. */
+#define ELOFTR_BLOCKS 21     /* RepVGG blocks: 1 + 2 + 4 + 14. */
+#define ELOFTR_LAYERS 4      /* Transformer layers (self + cross each). */
 #define ELOFTR_TRAIN_RES 832 /* Training resolution of the "npe". */
 
 /* One aggregated attention block of the coarse transformer. */
 struct eloftr_attn {
-    cl_mem q_agg;           /* Depthwise 4x4 (256, 1, 4, 4). */
-    cl_mem norm_g, norm_b;  /* LayerNorm of the aggregated tokens. */
-    cl_mem wq, wk, wv, wo;  /* (256, 256), no bias. */
-    cl_mem fc1, fc2;        /* (512, 512), (256, 512), no bias. */
-    cl_mem mlp_g, mlp_b;    /* LayerNorm after the MLP. */
+    cl_mem q_agg;          /* Depthwise 4x4 (256, 1, 4, 4). */
+    cl_mem norm_g, norm_b; /* LayerNorm of the aggregated tokens. */
+    cl_mem wq, wk, wv, wo; /* (256, 256), no bias. */
+    cl_mem fc1, fc2;       /* (512, 512), (256, 512), no bias. */
+    cl_mem mlp_g, mlp_b;   /* LayerNorm after the MLP. */
 };
 
 /* Efficient LoFTR (Wang et al., 2024) on an OpenCL device, with the
@@ -44,13 +44,13 @@ struct eloftr_model {
      * input (their training resolution over the test one). */
     float pos_scale;
     int H, W, h, w, ah, aw, nmax;
-    cl_mem img, s_a, s_b, f1[2], f2[2], x[2];   /* Backbone, per image. */
-    cl_mem t_q, t_kv, t_qn, t_kvn, t_Q, t_K, t_V, t_O, t_O2, t_cat, t_tok,
-        t_h1, t_h2, rope; /* Transformer. */
+    cl_mem img, s_a, s_b, f1[2], f2[2], x[2]; /* Backbone, per image. */
+    cl_mem t_q, t_kv, t_qn, t_kvn, t_Q, t_K, t_V, t_O, t_O2, t_cat, t_tok, t_h1,
+        t_h2, rope; /* Transformer. */
     cl_mem s_blk, row_lse, col_m, col_s, row_max, row_arg, col_max,
-        col_arg; /* Coarse matching. */
+        col_arg;                      /* Coarse matching. */
     cl_mem fu_a, fu_b, fu_c, fine[2]; /* Fine fusion. */
-    cl_mem m_idx, m_out;             /* Fine matching. */
+    cl_mem m_idx, m_out;              /* Fine matching. */
     int blk_rows;
     /* Last run, for dumps: coarse matches (i, j, confidence). */
     int nm;

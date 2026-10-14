@@ -34,19 +34,16 @@
 
 /* sqrt of the 0.99 quantile of the chi-squared distribution with two
  * degrees of freedom: the largest residual of an inlier is k sigma_max. */
-#define K_SIGMA    3.0348542587702925
-#define SQRT_PI    1.7724538509055160
+#define K_SIGMA 3.0348542587702925
+#define SQRT_PI 1.7724538509055160
 #define MAX_SAMPLE 10
 #define IRLS_ITERS 10
-#define GC_ITERS   10
+#define GC_ITERS 10
 
 static const char *kind_names[ROBUST_NKINDS] = {"none", "ransac", "magsac",
                                                 "gcransac", "superansac"};
 
-const char *robust_name(enum robust_kind k)
-{
-    return kind_names[k];
-}
+const char *robust_name(enum robust_kind k) { return kind_names[k]; }
 
 int robust_parse(const char *name)
 {
@@ -77,10 +74,7 @@ void robust_defaults(struct robust_config *c, enum robust_kind kind,
 }
 
 /* Upper incomplete gamma Gamma(1/2, x) and lower gamma(3/2, x). */
-static double upper_half(double x)
-{
-    return SQRT_PI * erfc(sqrt(x));
-}
+static double upper_half(double x) { return SQRT_PI * erfc(sqrt(x)); }
 
 static double lower_three_halves(double x)
 {

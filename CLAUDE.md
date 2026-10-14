@@ -60,12 +60,18 @@ state, how to build, test and run, and what is still to be decided.
   the NCC refinement now runs unless `-r`; `-s` is a deprecated no-op
   (warning) kept for existing scripts (the Tucson report's use it).
 
+- Phase 3 done (2026-10-14): `matcher=matchanything` = the ELoFTR
+  network with `zju-community/matchanything_eloftr` weights (in
+  `~/models/matchanything` on both machines; downloaded when
+  missing, Apache 2.0 on the model card) and RoPE positions scaled by 832 / tile long side (`npe`).
+  Not better than eloftr on the Tucson data; defaults unchanged.
+  `I_COREGISTRATION_OPENCL_MATCHANYTHING=<model.safetensors>` enables
+  its pytest. The Space clone is `~/dev/MatchAnything_space`.
+
 ## Next step
 
-PLAN.md phase 3 (MatchAnything). Ask the user about the four
-decisions at the end of PLAN.md before phases 3-4 (DINOv3 licence for
-RoMa v2; download of ELoFTR/MatchAnything weights; MatchAnything in the
-published addon or not; order). Their answers are not known yet.
+PLAN.md phase 4, starting with RoMa v1 (the user's choice; decisions
+recorded at the end of PLAN.md).
 
 ## Build, test, run
 
@@ -79,6 +85,7 @@ published addon or not; order). Their answers are not known yet.
   `.html`); `make` fails without the `.html`.
 - Tests: `I_COREGISTRATION_OPENCL_CHECKPOINT=~/models/disk/depth-save.pth
   I_COREGISTRATION_OPENCL_ELOFTR=~/models/eloftr/model.safetensors
+  I_COREGISTRATION_OPENCL_MATCHANYTHING=~/models/matchanything/model.safetensors
   grass --tmp-project XY --exec python3 -m pytest tests`. To test a
   build that is not installed (the server builds), also set
   `I_COREGISTRATION_OPENCL_BINDIR=<build>/bin`: the GRASS session puts the

@@ -6,11 +6,11 @@
 #include "ocl_backend.h"
 
 /* Activations, applied after the bias (see apply_act in ops.cl). */
-#define ACT_NONE         0
-#define ACT_GELU         1
-#define ACT_RELU         2
-#define ACT_LEAKY        3
-#define ACT_GELU_TANH    4
+#define ACT_NONE 0
+#define ACT_GELU 1
+#define ACT_RELU 2
+#define ACT_LEAKY 3
+#define ACT_GELU_TANH 4
 
 /* Largest attention head dimension of ops_attention. */
 #define OPS_MAX_HEAD_DIM 128

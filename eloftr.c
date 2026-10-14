@@ -136,8 +136,7 @@ static void load_block(struct eloftr_model *m, struct pth_file *pf, int l,
     snprintf(name, sizeof(name), "%s.identity.weight", pre);
     if (pth_find(pf, name)) {
         if (ci != co || m->bstride[l] != 1)
-            G_fatal_error(_("ELoFTR: unexpected identity branch in <%s>"),
-                          pre);
+            G_fatal_error(_("ELoFTR: unexpected identity branch in <%s>"), pre);
         wi = G_calloc((size_t)co * ci, sizeof(float));
         bi = G_calloc(co, sizeof(float));
         for (k = 0; k < co; k++)
@@ -174,7 +173,7 @@ static void load_attn(struct eloftr_model *m, struct pth_file *pf, int layer,
              "efficientloftr.local_feature_transformer.layers.%d.%s", layer,
              kind);
 #define LD(field, suffix, nd, shape)                                           \
-    snprintf(name, sizeof(name), "%s.%s", pre, suffix);                       \
+    snprintf(name, sizeof(name), "%s.%s", pre, suffix);                        \
     a->field = load_dev(m, pf, name, nd, shape)
     LD(q_agg, "aggregation.q_aggregation.weight", 4, qa);
     LD(norm_g, "aggregation.norm.weight", 1, v1);
@@ -397,9 +396,9 @@ static void backbone(struct eloftr_model *m, int k)
 static void copy(struct eloftr_model *m, cl_mem src, size_t soff, cl_mem dst,
                  size_t doff, size_t floats)
 {
-    ocl_check(clEnqueueCopyBuffer(m->ocl->queue, src, dst,
-                                  soff * sizeof(float), doff * sizeof(float),
-                                  floats * sizeof(float), 0, NULL, NULL),
+    ocl_check(clEnqueueCopyBuffer(m->ocl->queue, src, dst, soff * sizeof(float),
+                                  doff * sizeof(float), floats * sizeof(float),
+                                  0, NULL, NULL),
               "clEnqueueCopyBuffer");
 }
 
@@ -422,8 +421,7 @@ static void agg_attn(struct eloftr_model *m, const struct eloftr_attn *a,
                   ACT_NONE, 0);
     ops_layernorm(o, na, D, m->t_kvn, m->t_kvn, a->norm_g, a->norm_b, EPS_LN,
                   ACT_NONE, 0);
-    ops_linear(o, na, D, D, m->t_qn, 0, a->wq, NULL, m->t_Q, 0, ACT_NONE, 0,
-               0);
+    ops_linear(o, na, D, D, m->t_qn, 0, a->wq, NULL, m->t_Q, 0, ACT_NONE, 0, 0);
     ops_linear(o, na, D, D, m->t_kvn, 0, a->wk, NULL, m->t_K, 0, ACT_NONE, 0,
                0);
     ops_linear(o, na, D, D, m->t_kvn, 0, a->wv, NULL, m->t_V, 0, ACT_NONE, 0,
@@ -584,22 +582,22 @@ static void fusion(struct eloftr_model *m, int k)
                 ACT_NONE, 0);
     ops_resize(o, m->fu_a, 256, h, w, m->fu_b, H4, W4, 0, 0, 2.0f);
     /* Block 0 at 1/4: hidden 128, intermediate 256. */
-    ops_conv1x1(o, m->f2[k], 0, 128, H4 * W4, m->f1_w[0], NULL, 256, m->fu_c,
-                0, ACT_NONE, 0);
+    ops_conv1x1(o, m->f2[k], 0, 128, H4 * W4, m->f1_w[0], NULL, 256, m->fu_c, 0,
+                ACT_NONE, 0);
     ops_axpby(o, m->fu_c, m->fu_c, 1.0f, m->fu_b, 1.0f, 256L * H4 * W4,
               256L * H4 * W4);
-    conv3x3(m, m->fu_c, 256, H4, W4, m->f2_w[0], m->f2_b[0], 256, 1,
-            ACT_LEAKY, m->fu_a);
+    conv3x3(m, m->fu_c, 256, H4, W4, m->f2_w[0], m->f2_b[0], 256, 1, ACT_LEAKY,
+            m->fu_a);
     conv3x3(m, m->fu_a, 256, H4, W4, m->f3_w[0], NULL, 128, 1, ACT_NONE,
             m->fu_b);
     ops_resize(o, m->fu_b, 128, H4, W4, m->fu_c, H2, W2, 0, 0, 2.0f);
     /* Block 1 at 1/2: hidden 64, intermediate 128. */
-    ops_conv1x1(o, m->f1[k], 0, 64, H2 * W2, m->f1_w[1], NULL, 128, m->fu_a,
-                0, ACT_NONE, 0);
+    ops_conv1x1(o, m->f1[k], 0, 64, H2 * W2, m->f1_w[1], NULL, 128, m->fu_a, 0,
+                ACT_NONE, 0);
     ops_axpby(o, m->fu_a, m->fu_a, 1.0f, m->fu_c, 1.0f, 128L * H2 * W2,
               128L * H2 * W2);
-    conv3x3(m, m->fu_a, 128, H2, W2, m->f2_w[1], m->f2_b[1], 128, 1,
-            ACT_LEAKY, m->fu_b);
+    conv3x3(m, m->fu_a, 128, H2, W2, m->f2_w[1], m->f2_b[1], 128, 1, ACT_LEAKY,
+            m->fu_b);
     conv3x3(m, m->fu_b, 128, H2, W2, m->f3_w[1], NULL, 64, 1, ACT_NONE,
             m->fu_c);
     ops_resize(o, m->fu_c, 64, H2, W2, m->fine[k], m->H, m->W, 0, 0, 2.0f);
@@ -646,8 +644,8 @@ static void dump_dev(struct eloftr_model *m, const char *dir, int tile,
 
     ocl_read(m->ocl, b, 0, v, floats * sizeof(float));
     snprintf(path, sizeof(path), "%s/tile%03d_eloftr_%s.f32", dir, tile, what);
-    if (!(fp = fopen(path, "wb")) || fwrite(v, sizeof(float), floats, fp) !=
-                                         floats)
+    if (!(fp = fopen(path, "wb")) ||
+        fwrite(v, sizeof(float), floats, fp) != floats)
         G_fatal_error(_("Unable to write debug dump <%s>"), path);
     fclose(fp);
     G_free(v);
@@ -684,16 +682,15 @@ void eloftr_match(struct eloftr_model *m, const float *grey0,
 
 void eloftr_free(struct eloftr_model *m)
 {
-    cl_mem *all[] = {&m->img,   &m->s_a,    &m->s_b,     &m->f1[0],
-                     &m->f1[1], &m->f2[0],  &m->f2[1],   &m->x[0],
-                     &m->x[1],  &m->fine[0], &m->fine[1], &m->t_q,
-                     &m->t_kv,  &m->t_qn,   &m->t_kvn,   &m->t_Q,
-                     &m->t_K,   &m->t_V,    &m->t_O,     &m->t_O2,
-                     &m->t_cat,  &m->t_tok,   &m->t_h1,
-                     &m->t_h2,  &m->rope,   &m->s_blk,   &m->row_lse,
-                     &m->col_m, &m->col_s,  &m->row_max, &m->row_arg,
-                     &m->col_max, &m->col_arg, &m->fu_a, &m->fu_b,
-                     &m->fu_c,  &m->m_idx,  &m->m_out,   &m->f_out};
+    cl_mem *all[] = {
+        &m->img,     &m->s_a,     &m->s_b,     &m->f1[0], &m->f1[1],
+        &m->f2[0],   &m->f2[1],   &m->x[0],    &m->x[1],  &m->fine[0],
+        &m->fine[1], &m->t_q,     &m->t_kv,    &m->t_qn,  &m->t_kvn,
+        &m->t_Q,     &m->t_K,     &m->t_V,     &m->t_O,   &m->t_O2,
+        &m->t_cat,   &m->t_tok,   &m->t_h1,    &m->t_h2,  &m->rope,
+        &m->s_blk,   &m->row_lse, &m->col_m,   &m->col_s, &m->row_max,
+        &m->row_arg, &m->col_max, &m->col_arg, &m->fu_a,  &m->fu_b,
+        &m->fu_c,    &m->m_idx,   &m->m_out,   &m->f_out};
     int i, l;
 
     for (i = 0; i < (int)(sizeof(all) / sizeof(all[0])); i++)

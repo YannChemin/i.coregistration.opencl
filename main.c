@@ -44,14 +44,15 @@
 
 /* Efficient LoFTR outdoor weights converted by Hugging Face (Apache 2.0). */
 #define ELOFTR_URL                                                             \
-    "https://huggingface.co/zju-community/efficientloftr/resolve/main/"       \
+    "https://huggingface.co/zju-community/efficientloftr/resolve/main/"        \
     "model.safetensors"
 #define ELOFTR_SIZE 64263488LL
 
-/* MatchAnything's Efficient LoFTR weights converted by Hugging Face: read
- * from a path only, never downloaded (the user's decision; see the
- * manual for the licence). */
-#define MATCHANYTHING_REPO "https://huggingface.co/zju-community/matchanything_eloftr"
+/* MatchAnything's Efficient LoFTR weights converted by Hugging Face
+ * (Apache 2.0 on that model card; see the manual), same size. */
+#define MATCHANYTHING_URL                                                      \
+    "https://huggingface.co/zju-community/matchanything_eloftr/resolve/"       \
+    "main/model.safetensors"
 
 /* Refinement windows, in cells: correlation radius and search. */
 #define REFINE_RADIUS 7
@@ -93,7 +94,8 @@ static void tile_input(const struct rgb_image *img, int x0, int y0, int w,
 
             valid[(size_t)y * w + x] = img->valid[i];
             for (b = 0; b < 3; b++)
-                out[b * plane + (size_t)y * W + x] = img->rgb[3 * i + b] / 255.0f;
+                out[b * plane + (size_t)y * W + x] =
+                    img->rgb[3 * i + b] / 255.0f;
         }
 }
 
@@ -208,9 +210,8 @@ int main(int argc, char *argv[])
                  "cells"),
                _("Efficient LoFTR: detector-free semi-dense matches to a "
                  "fraction of a cell"),
-               _("Efficient LoFTR with MatchAnything's cross-modal weights "
-                 "(given with checkpoint= or weights_dir=, not "
-                 "downloaded)"));
+               _("Efficient LoFTR with MatchAnything's cross-modal "
+                 "weights"));
     opt.matcher->guisection = _("Model");
 
     opt.checkpoint = G_define_standard_option(G_OPT_F_INPUT);
@@ -219,8 +220,7 @@ int main(int argc, char *argv[])
     opt.checkpoint->description =
         _("Weights of the matcher (DISK: depth-save.pth or "
           "epipolar-save.pth; eloftr, matchanything: model.safetensors); "
-          "default: in weights_dir=, downloaded if missing (but "
-          "matchanything's)");
+          "default: in weights_dir=, downloaded if missing)");
     opt.checkpoint->guisection = _("Model");
 
     opt.weights_dir = G_define_standard_option(G_OPT_M_DIR);
@@ -238,8 +238,7 @@ int main(int argc, char *argv[])
     opt.model->options = "depth,epipolar";
     opt.model->answer = "depth";
     opt.model->description = _("DISK weights");
-    G_asprintf((char **)&opt.model->descriptions,
-               "depth;%s;epipolar;%s",
+    G_asprintf((char **)&opt.model->descriptions, "depth;%s;epipolar;%s",
                _("Trained with depth supervision, more precise (as the "
                  "repository)"),
                _("Trained with epipolar supervision, keypoints everywhere "
@@ -268,7 +267,8 @@ int main(int argc, char *argv[])
     opt.tile_overlap->key = "tile_overlap";
     opt.tile_overlap->type = TYPE_INTEGER;
     opt.tile_overlap->answer = "64";
-    opt.tile_overlap->description = _("Overlap of neighbouring tiles, in cells");
+    opt.tile_overlap->description =
+        _("Overlap of neighbouring tiles, in cells");
     opt.tile_overlap->guisection = _("Model");
 
     opt.percentile = G_define_option();
@@ -506,26 +506,19 @@ int main(int argc, char *argv[])
             dir = default_weights_dir("DISK_MODELS_DIR", "disk");
         if (is_eloftr) {
             G_asprintf(&ckpt, "%s/model.safetensors", dir);
-            url = G_store(ELOFTR_URL);
+            url = G_store(is_ma ? MATCHANYTHING_URL : ELOFTR_URL);
         }
         else {
             G_asprintf(&ckpt, "%s/%s-save.pth", dir, opt.model->answer);
-            G_asprintf(&url, "%s/%s-save.pth", DOWNLOAD_URL,
-                       opt.model->answer);
+            G_asprintf(&url, "%s/%s-save.pth", DOWNLOAD_URL, opt.model->answer);
         }
-        if (!file_exists(ckpt) && is_ma)
-            G_fatal_error(_("MatchAnything weights <%s> not found: download "
-                            "model.safetensors from %s (read its licence) "
-                            "into that folder, or give checkpoint="),
-                          ckpt, MATCHANYTHING_REPO);
         if (!file_exists(ckpt)) {
             if (flag.offline->answer)
                 G_fatal_error(_("Checkpoint <%s> not found and -o given"),
                               ckpt);
             G_message(_("Downloading <%s> weights <%s>..."),
                       opt.matcher->answer, url);
-            download_file(url, ckpt,
-                          is_eloftr ? ELOFTR_SIZE : CHECKPOINT_SIZE);
+            download_file(url, ckpt, is_eloftr ? ELOFTR_SIZE : CHECKPOINT_SIZE);
         }
         G_free(url);
         G_free(dir);
@@ -566,12 +559,10 @@ int main(int argc, char *argv[])
     progress_end();
     pth_open(&pf, ckpt);
     /* RoPE position scaling: MatchAnything's wrapper always applies it,
-     * Efficient LoFTR's defaults do not; I_COREGISTRATION_OPENCL_NPE=0
-     * or 1 overrides (evaluation aid). */
+     * Efficient LoFTR's defaults (and Transformers) do not. Either way
+     * made no measurable difference on 768- and 1024-cell tiles
+     * (tests/eval/README.md, phase 3). */
     npe = is_ma;
-    if (getenv("I_COREGISTRATION_OPENCL_NPE") &&
-        *getenv("I_COREGISTRATION_OPENCL_NPE"))
-        npe = atoi(getenv("I_COREGISTRATION_OPENCL_NPE")) != 0;
     if (is_eloftr)
         matcher_eloftr_create(&matcher, &ops, &pf, opt.matcher->answer, npe);
     else
@@ -689,8 +680,8 @@ int main(int argc, char *argv[])
                                        REFINE_SEARCH);
             /* Robust model of the tile: its outliers become inactive. */
             if (est_kind != ROBUST_NONE && gl.n > first) {
-                if (!estimate_points(&gl.v[first], gl.n - first, &tcfg, &win,
-                                     0, NULL))
+                if (!estimate_points(&gl.v[first], gl.n - first, &tcfg, &win, 0,
+                                     NULL))
                     nfail++;
                 for (i = first; i < gl.n; i++)
                     nkept += gl.v[i].inlier;
@@ -752,8 +743,8 @@ int main(int argc, char *argv[])
         G_message(_("Over the region (%s, %s model): %d of %d control points "
                     "kept; residual RMS %.3f, leave-one-out RMS %.3f map "
                     "units"),
-                  robust_name(est_kind), model_name(region_type), after,
-                  before, rms, loo);
+                  robust_name(est_kind), model_name(region_type), after, before,
+                  rms, loo);
     }
     for (nactive = 0, i = 0; i < gl.n; i++)
         nactive += gl.v[i].inlier;

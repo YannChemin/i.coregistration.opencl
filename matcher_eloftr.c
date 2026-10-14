@@ -38,8 +38,8 @@ static void to_grey(const float *rgb, int H, int W, float *grey)
     size_t p = (size_t)H * W, i;
 
     for (i = 0; i < p; i++)
-        grey[i] = 0.2989f * rgb[i] + 0.5870f * rgb[p + i] +
-                  0.1140f * rgb[2 * p + i];
+        grey[i] =
+            0.2989f * rgb[i] + 0.5870f * rgb[p + i] + 0.1140f * rgb[2 * p + i];
 }
 
 static void eloftr_m_alloc(struct matcher *m, int H, int W)

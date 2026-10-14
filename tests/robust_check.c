@@ -29,7 +29,7 @@
 #include "models.h"
 #include "robust.h"
 
-#define SIDE  1000.0
+#define SIDE 1000.0
 #define NOISE 0.3
 
 static unsigned long long rng = 12345;

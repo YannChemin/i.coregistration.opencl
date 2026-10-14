@@ -7,8 +7,8 @@
 #include "ops.h"
 #include "pth_loader.h"
 
-#define DISK_DESC 128   /* Descriptor dimension. */
-#define DISK_LAYERS 9   /* Five down blocks, four up blocks. */
+#define DISK_DESC 128    /* Descriptor dimension. */
+#define DISK_LAYERS 9    /* Five down blocks, four up blocks. */
 #define DISK_MULTIPLE 16 /* Input sides must be multiples of this. */
 
 /* DISK (Tyszkiewicz et al., 2020) on an OpenCL device: the U-Net of
@@ -46,8 +46,8 @@ void disk_alloc(struct disk_model *m, int H, int W, int nmax);
  * heatmap value) and L2-normalized descriptors (n x DISK_DESC). Returns
  * the number of keypoints. */
 int disk_detect(struct disk_model *m, const float *img, int H, int W, int h,
-                int w, int n, float thresh, const unsigned char *valid,
-                int *xy, float *score, float *desc);
+                int w, int n, float thresh, const unsigned char *valid, int *xy,
+                float *score, float *desc);
 
 void disk_free(struct disk_model *m);
 

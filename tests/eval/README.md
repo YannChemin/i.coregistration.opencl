@@ -277,3 +277,93 @@ longer needs `-s` (deprecated; `-r` skips it). The rows above marked
 `-s` are what the module now does without flags; to reproduce the
 phase 0 and 1 rows, pass `--options matcher=disk` (and `--flags r` for
 those run without `-s`).
+
+## Phase 3: MatchAnything (2026-10-14)
+
+`matcher=matchanything`: the Efficient LoFTR network of phase 2 with
+the weights `zju-community/matchanything_eloftr` (Hugging Face), and the
+rotary positions scaled by 832 over the tile's long side ("npe", as the
+authors' code; Transformers lacks it). Parity on one Google/ESRI tile
+of 1024 cells (scale 0.8125) with `tests/reference_compare_eloftr.py`:
+backbone and transformer within 1.3e-5 relative, 13976/13976 coarse
+matches, fine positions within 6.2e-5 pixel.
+
+Synthetic pairs (as phase 2, refinement on, superansac), cells:
+
+| scenario | matcher | active | median error | p90 error | within 1 cell | object leaks |
+|---|---|---|---|---|---|---|
+| translation | eloftr | 67795 | 0.181 | 0.367 | 99.79 % | 0 |
+| translation | eloftr + npe | 67710 | 0.181 | 0.366 | 99.81 % | 0 |
+| translation | matchanything | 61790 | 0.179 | 0.37 | 99.66 % | 0 |
+| affine | eloftr | 71175 | 0.134 | 0.345 | 99.74 % | 0 |
+| affine | eloftr + npe | 70801 | 0.134 | 0.344 | 99.75 % | 0 |
+| affine | matchanything | 70446 | 0.134 | 0.345 | 99.65 % | 0 |
+| smooth | eloftr | 74729 | 0.127 | 0.31 | 99.86 % | 0 |
+| smooth | eloftr + npe | 74526 | 0.127 | 0.31 | 99.86 % | 0 |
+| smooth | matchanything | 77042 | 0.126 | 0.309 | 99.82 % | 0 |
+| objects | eloftr | 65848 | 0.089 | 0.296 | 99.54 % | 16 |
+| objects | eloftr + npe | 65924 | 0.088 | 0.295 | 99.56 % | 12 |
+| objects | matchanything | 67524 | 0.088 | 0.294 | 99.32 % | 46 |
+| radiometric | eloftr | 72958 | 0.4 | 0.762 | 95.55 % | 0 |
+| radiometric | eloftr + npe | 73032 | 0.399 | 0.758 | 95.82 % | 0 |
+| radiometric | matchanything | 70846 | 0.396 | 0.791 | 94.14 % | 0 |
+
+Basemaps (4072-cell crops), metres; loop closure median, p90:
+
+| pair | matcher | active | inactive | LOO order 1 median, p90 |
+|---|---|---|---|---|
+| esri -> google | eloftr | 232210 | 24052 | 0.338, 0.868 |
+| esri -> google | eloftr + npe | 230941 | 24595 | 0.339, 0.872 |
+| esri -> google | matchanything | 223465 | 25648 | 0.35, 0.861 |
+| google -> bing | eloftr | 261708 | 19762 | 0.146, 0.589 |
+| google -> bing | eloftr + npe | 261013 | 19882 | 0.147, 0.595 |
+| google -> bing | matchanything | 256950 | 21379 | 0.15, 0.6 |
+| bing -> esri | eloftr | 221786 | 31935 | 0.327, 0.82 |
+| bing -> esri | eloftr + npe | 221062 | 32310 | 0.324, 0.822 |
+| bing -> esri | matchanything | 210903 | 33042 | 0.331, 0.799 |
+
+Loop closure: eloftr 0.066, 0.273; eloftr + npe 0.067, 0.28;
+matchanything 0.077, 0.325.
+
+Cross-modal: AVIRIS (11.3 m) against the three basemaps averaged onto
+its grid (`--pairs star`, threshold 11.3 m, one tile of 768 x 576: npe
+scale 1.083), in true colour (640, 550, 460 nm) and in SWIR/NIR false
+colour (`prepare_hyperspectral.py --rgb 2200,1650,860`) against the
+visible basemaps. Active points (inactive), LOO order 1 median and p90
+in metres, for ESRI, Google and Bing:
+
+| composite | matcher | ESRI | Google | Bing |
+|---|---|---|---|---|
+| true colour | disk | 782 (185) 1.94, 4.32 | 823 (221) 1.68, 3.66 | 767 (225) 1.76, 4.36 |
+| true colour | eloftr | 5914 (320) 2.08, 5.17 | 5904 (325) 1.99, 4.69 | 5924 (298) 2.07, 4.97 |
+| true colour | eloftr + npe | 5912 (322) 2.08, 5.15 | 5908 (321) 1.99, 4.70 | 5931 (295) 2.07, 4.97 |
+| true colour | matchanything | 5918 (321) 2.01, 5.00 | 5973 (255) 2.02, 4.57 | 5951 (271) 2.05, 4.91 |
+| true colour | matchanything, no npe | 5925 (316) 2.01, 5.02 | 5975 (253) 2.01, 4.58 | 5953 (273) 2.05, 4.92 |
+| SWIR/NIR | disk | 763 (164) 2.80, 6.08 | 541 (304) 2.04, 6.29 | 468 (396) 2.56, 7.01 |
+| SWIR/NIR | eloftr | 5678 (531) 2.49, 5.97 | 5289 (845) 2.44, 6.66 | 5003 (1111) 2.75, 7.39 |
+| SWIR/NIR | matchanything | 5783 (438) 2.50, 6.03 | 5419 (767) 2.46, 6.64 | 5097 (1047) 2.65, 7.31 |
+| SWIR/NIR, -r | disk | 455 (472) 2.79, 11.89 | 355 (474) 3.32, 11.90 | 314 (523) 1.59, 11.91 |
+| SWIR/NIR, -r | eloftr | 4969 (1241) 2.03, 9.21 | 4629 (1509) 2.00, 9.82 | 4125 (1994) 2.08, 9.82 |
+| SWIR/NIR, -r | matchanything | 5002 (1223) 1.59, 9.55 | 4629 (1558) 1.80, 10.07 | 4149 (2000) 1.84, 10.09 |
+
+Conclusions:
+
+- MatchAnything needs no new code: same tensors, same configuration but
+  the npe size; the module is verified against Transformers with the
+  scaling.
+- The npe scaling changes nothing measurable at these tile sizes (scale
+  0.81-1.08), for either weights: Efficient LoFTR keeps Transformers'
+  unscaled positions, MatchAnything the authors' scaling.
+- On these data MatchAnything is not better than Efficient LoFTR's
+  outdoor weights: same synthetic accuracy, 3-5 % fewer basemap points
+  and a looser loop closure, three times the moved-object leaks; on the
+  cross-modal pairs 1-10 % more active points and 10-20 % fewer
+  inactive ones at the same residuals. SWIR/NIR against visible is not
+  a hard enough modality gap to show its training; thermal, SAR or map
+  references would be (none available here).
+- Both ELoFTR weights find 7-10 times DISK's control points across
+  modalities, and DISK loses half of its points between SWIR/NIR and
+  visible.
+- The NCC refinement still helps across modalities (LOO p90 6-7 m
+  against 9-10 m with `-r`): it stays on by default.
+- Defaults unchanged: `matcher=eloftr`, refinement on.

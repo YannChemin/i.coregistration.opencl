@@ -265,6 +265,22 @@ count), translate the differences from the paper, not the PRL code.
 basemap (Tucson), thermal or SAR if available; compare with DISK and
 ELoFTR outdoor weights.
 
+Status (2026-10-14): done. 3.1: the Hugging Face conversion
+`zju-community/matchanything_eloftr` (model card: Apache 2.0; the
+authors' GitHub repository is now under the PRL) has the same tensors
+and configuration as Efficient LoFTR's but `embedding_size` 26 x 26: the
+authors' "npe", RoPE positions scaled by 832 over the input's long side,
+which Transformers ignores. 3.2: the only change is that scale
+(`eloftr_model.pos_scale`), on for `matcher=matchanything`; weights read
+from `checkpoint=` or `~/models/matchanything`, downloaded there
+when missing (Apache 2.0 on the Hugging Face model card; at first read
+from a path only, changed by the user the same day).
+Parity with Transformers + the scaling: 13976/13976 coarse matches,
+fine positions within 6.2e-5 pixel. 3.3: in `tests/eval/README.md`;
+MatchAnything equals Efficient LoFTR on these data (slightly more
+cross-modal points, more moved-object leaks); no thermal or SAR pair was
+available. Defaults unchanged.
+
 ## Phase 4. RoMa v2 (dense)
 
 Sources: `~/dev/RoMaV2` (MIT) with a DINOv3 ViT-L/16 backbone whose code
@@ -343,17 +359,19 @@ Eval: same model and accuracy as with all matches, 10-100 times faster.
 | v0 (done) | DISK + AdaLAM, tiles, filters, `-s` | kornia identical, pytest 5/5 |
 | v0.1 (done) | Phase 0: kernel library, matcher interface, eval harness | v0 results unchanged, baseline report |
 | v0.2 (done) | Phase 1: robust estimation stage | synthetic outlier tests, OpenCV USAC parity |
-| v0.3 | Phase 2: Efficient LoFTR | PyTorch parity per stage, eval vs v0 |
-| v0.4 | Phase 3: MatchAnything ELoFTR weights | cross-modal eval |
-| v0.5 | Phase 4: RoMa v2 (dense field) | PyTorch parity, dense eval |
+| v0.3 (done) | Phase 2: Efficient LoFTR | PyTorch parity per stage, eval vs v0 |
+| v0.4 (done) | Phase 3: MatchAnything ELoFTR weights | cross-modal eval |
+| v0.5 | Phase 4: RoMa v1, then v2 (dense field) | PyTorch parity, dense eval |
 | v0.6 | Phase 5: summarization | speed and accuracy vs full matches |
 
-## Decisions needed from the user
+## Decisions from the user (2026-10-14)
 
-1. DINOv3 licence for RoMa v2 (or RoMa v1 first).
-2. Whether the ELoFTR and MatchAnything weights may be downloaded by the
-   module (licence of the weights files), or only read from a path.
-3. Whether MatchAnything stays in the published addon (weights by path,
-   registration) or in a private build only.
-4. Order: robust stage before Efficient LoFTR (recommended, as above), or
-   the matchers first.
+1. Phase 4 starts with RoMa v1 (MIT, DINOv2 Apache 2.0); RoMa v2 and
+   DINOv3 later.
+2. Efficient LoFTR's and MatchAnything's weights are downloaded when
+   missing (MatchAnything's at first by path only; downloaded since the
+   user noticed the Hugging Face conversion is Apache 2.0).
+3. MatchAnything ships in the published addon, with the licence terms
+   in the manual. The user's own use is personal
+   research (no registration).
+4. Order: robust stage first (done).

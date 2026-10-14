@@ -13,8 +13,10 @@ Python nor PyTorch is needed at run time.</p>
 the whole image, texture-poor areas included, or DISK keypoints matched
 by nearest neighbour and filtered with AdaLAM (<code>disk</code>), which keeps the
 matches that agree with a local affine transformation around confident
-seed matches. Both give the same outputs and go through the same
-filters, refinement and robust estimation. On the evaluation pairs
+seed matches, or Efficient LoFTR with the weights of MatchAnything
+(<code>matchanything</code>), trained for matching across imaging modalities. All
+give the same outputs and go through the same filters, refinement and
+robust estimation. On the evaluation pairs
 (aerial basemaps of 0.5 m), Efficient LoFTR with the refinement gave 13
 to 18 times as many control points as DISK, over every part of the
 images, and smaller leave-one-out residuals; DISK did better between
@@ -114,6 +116,37 @@ DISK and AdaLAM sections do not apply. On the same tile, the coarse
 matches are those of the authors' code, and the fine positions agree
 with it within 1e-4 cell (99 % within 1e-6), but for float ties in the
 first fine stage (see <code>tests/reference_compare_eloftr.py</code>).</p>
+<h3>MatchAnything</h3>
+<p>MatchAnything, by the group that made Efficient LoFTR (a preprint, not
+yet peer reviewed: <a href="https://zju3dv.github.io/MatchAnything">https://zju3dv.github.io/MatchAnything</a>), trains
+Efficient LoFTR on
+large sets of synthetic cross-modal pairs (visible against thermal,
+depth and other renderings) so that one set of weights matches images
+of different sensors; the network is unchanged. With
+<code>matcher=matchanything</code>, the Efficient LoFTR above runs these weights,
+with the rotary positions scaled by 832 over the tile's long side (the
+authors' training resolution over the test one, as their code does). On
+a 1024-cell tile, the coarse matches were those of Transformers'
+network run with that scaling (13976 of 13976), and the fine positions
+agreed within 1e-4 cell.</p>
+<p>The weights converted by Hugging Face
+(<code>zju-community/matchanything_eloftr</code>, <code>model.safetensors</code>, 61 MiB) are
+published under the Apache License 2.0 on their model card; the
+authors' own repository has since moved to their Project Registration
+License (free for research, education and personal use, with a free
+registration before use in a company's or organization's project).
+Without <b>checkpoint</b>, they are looked for in <b>weights_dir</b> (by
+default <code>$MATCHANYTHING_MODELS_DIR</code>, or <code>~/models/matchanything</code>) and
+downloaded there when missing, unless <b>-o</b> is given.</p>
+<p>On the Tucson evaluation (aerial basemaps of 0.5 m; an AVIRIS scene of
+11.3 m against them, in true colour and in SWIR/NIR false colour), the
+MatchAnything weights did as well as Efficient LoFTR's, not better:
+the same accuracy on synthetic shifts, slightly larger residuals on the
+basemaps, and on the cross-modal pairs a few percent more active
+control points at the same residuals, but more matches left on moved
+objects. Keep <code>eloftr</code> for images of the same kind, and try
+<code>matchanything</code> where the modalities differ more than here (thermal,
+SAR, maps).</p>
 <h3>Filters and refinement</h3>
 <p>Images of different dates show objects that moved: a vehicle, an
 aircraft or a ship gives matches that agree with each other but not with
@@ -254,7 +287,8 @@ device memory for 1024-cell tiles.</p>
 folder, each tile's DISK inputs, keypoints with their scores and
 descriptors, and AdaLAM matches are written there;
 <code>tests/reference_compare.py</code> compares them with <em>kornia</em> in a Python
-environment with PyTorch. With <code>eloftr</code>, the grey inputs, the backbone,
+environment with PyTorch. With <code>eloftr</code> and <code>matchanything</code>, the grey
+inputs, the backbone,
 transformer and fine features and the matches are written, and
 <code>tests/reference_compare_eloftr.py</code> compares them stage by stage with
 <em>transformers</em>. With <code>I_COREGISTRATION_OPENCL_PROFILE</code> set,
@@ -291,6 +325,13 @@ g.region raster=wv3.5 -p
 i.coregistration.opencl group=hymap_rgb reference=wv3_rgb \
     points=gcp_hymap -n threshold=5
 v.db.univar map=gcp_hymap column=shift where=&quot;inlier = 1&quot;</pre></div>
+<h3>Thermal or SWIR scene with MatchAnything</h3>
+<p>Match a thermal (or short-wave infrared) composite against a visible
+reference with MatchAnything's cross-modal weights
+(downloaded into <code>~/models/matchanything</code> on the first run), with the same tight
+threshold:</p>
+<div class="code"><pre>i.coregistration.opencl group=tir_rgb reference=wv3_rgb \
+    points=gcp_tir -n matcher=matchanything threshold=5</pre></div>
 <h2>REFERENCES</h2>
 <p>Barath, D., Matas, J., 2018. Graph-Cut RANSAC. In: Proceedings of the
 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR),

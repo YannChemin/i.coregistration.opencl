@@ -268,8 +268,7 @@ void gcp_write_vector(const struct gcp_list *l, const char *name,
         G_warning(_("Unable to create index for table <%s>"), Fi->table);
     if (db_grant_on_table(driver, Fi->table, DB_PRIV_SELECT,
                           DB_GROUP | DB_PUBLIC) != DB_OK)
-        G_fatal_error(_("Unable to grant privileges on table <%s>"),
-                      Fi->table);
+        G_fatal_error(_("Unable to grant privileges on table <%s>"), Fi->table);
 
     Points = Vect_new_line_struct();
     Cats = Vect_new_cats_struct();

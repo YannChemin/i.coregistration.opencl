@@ -1,7 +1,8 @@
 # i.coregistration.opencl
 
 GRASS GIS addon that finds control points between an imagery group and a
-reference group with Efficient LoFTR (default) or DISK local features
+reference group with Efficient LoFTR (default, or with MatchAnything's
+cross-modal weights) or DISK local features
 matched and filtered by AdaLAM, on an OpenCL device, refines them to a
 fraction of a cell, and writes them as the group's control points for
 *i.rectify* (thin plate spline with `-t`) or *v.rectify*. It grew from a
@@ -12,7 +13,7 @@ the published weights are read directly (safetensors, legacy PyTorch
 format).
 
 See `i.coregistration.opencl.md` for the manual, `TODO.md` for the
-planned matchers (RoMa v2, MatchAnything) and robust
+planned matchers (RoMa) and robust
 estimators (MAGSAC++, Graph-Cut RANSAC, VSAC, SupeRANSAC, dense match
 summarization), and `PLAN.md` for the order of the work.
 
@@ -56,7 +57,12 @@ headers and ICD loader, libcurl (download of the weights) and OpenMP.
   <https://github.com/cvlab-epfl/disk>, looked for in `$DISK_MODELS_DIR`
   or `~/models/disk`.
 
-Both are downloaded there when missing (`-o` to forbid).
+- `matcher=matchanything`: `model.safetensors` of
+  <https://huggingface.co/zju-community/matchanything_eloftr>, looked
+  for in `$MATCHANYTHING_MODELS_DIR` or `~/models/matchanything`
+  (Apache 2.0 on the model card; licence note in the manual).
+
+All are downloaded when missing (`-o` to forbid).
 
 ## Use
 
@@ -72,6 +78,7 @@ i.rectify -t group=google extension=_coreg method=linear -c
 ```sh
 I_COREGISTRATION_OPENCL_CHECKPOINT=~/models/disk/depth-save.pth \
 I_COREGISTRATION_OPENCL_ELOFTR=~/models/eloftr/model.safetensors \
+I_COREGISTRATION_OPENCL_MATCHANYTHING=~/models/matchanything/model.safetensors \
     grass --tmp-project XY --exec python3 -m pytest tests
 ```
 

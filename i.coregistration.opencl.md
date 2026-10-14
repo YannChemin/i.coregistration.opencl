@@ -15,8 +15,10 @@ The matching method is chosen with **matcher**: Efficient LoFTR
 the whole image, texture-poor areas included, or DISK keypoints matched
 by nearest neighbour and filtered with AdaLAM (`disk`), which keeps the
 matches that agree with a local affine transformation around confident
-seed matches. Both give the same outputs and go through the same
-filters, refinement and robust estimation. On the evaluation pairs
+seed matches, or Efficient LoFTR with the weights of MatchAnything
+(`matchanything`), trained for matching across imaging modalities. All
+give the same outputs and go through the same filters, refinement and
+robust estimation. On the evaluation pairs
 (aerial basemaps of 0.5 m), Efficient LoFTR with the refinement gave 13
 to 18 times as many control points as DISK, over every part of the
 images, and smaller leave-one-out residuals; DISK did better between
@@ -128,6 +130,41 @@ DISK and AdaLAM sections do not apply. On the same tile, the coarse
 matches are those of the authors' code, and the fine positions agree
 with it within 1e-4 cell (99 % within 1e-6), but for float ties in the
 first fine stage (see `tests/reference_compare_eloftr.py`).
+
+### MatchAnything
+
+MatchAnything, by the group that made Efficient LoFTR (a preprint, not
+yet peer reviewed: <https://zju3dv.github.io/MatchAnything>), trains
+Efficient LoFTR on
+large sets of synthetic cross-modal pairs (visible against thermal,
+depth and other renderings) so that one set of weights matches images
+of different sensors; the network is unchanged. With
+`matcher=matchanything`, the Efficient LoFTR above runs these weights,
+with the rotary positions scaled by 832 over the tile's long side (the
+authors' training resolution over the test one, as their code does). On
+a 1024-cell tile, the coarse matches were those of Transformers'
+network run with that scaling (13976 of 13976), and the fine positions
+agreed within 1e-4 cell.
+
+The weights converted by Hugging Face
+(`zju-community/matchanything_eloftr`, `model.safetensors`, 61 MiB) are
+published under the Apache License 2.0 on their model card; the
+authors' own repository has since moved to their Project Registration
+License (free for research, education and personal use, with a free
+registration before use in a company's or organization's project).
+Without **checkpoint**, they are looked for in **weights_dir** (by
+default `$MATCHANYTHING_MODELS_DIR`, or `~/models/matchanything`) and
+downloaded there when missing, unless **-o** is given.
+
+On the Tucson evaluation (aerial basemaps of 0.5 m; an AVIRIS scene of
+11.3 m against them, in true colour and in SWIR/NIR false colour), the
+MatchAnything weights did as well as Efficient LoFTR's, not better:
+the same accuracy on synthetic shifts, slightly larger residuals on the
+basemaps, and on the cross-modal pairs a few percent more active
+control points at the same residuals, but more matches left on moved
+objects. Keep `eloftr` for images of the same kind, and try
+`matchanything` where the modalities differ more than here (thermal,
+SAR, maps).
 
 ### Filters and refinement
 
@@ -288,7 +325,8 @@ With the environment variable `I_COREGISTRATION_OPENCL_DUMP` set to a
 folder, each tile's DISK inputs, keypoints with their scores and
 descriptors, and AdaLAM matches are written there;
 `tests/reference_compare.py` compares them with *kornia* in a Python
-environment with PyTorch. With `eloftr`, the grey inputs, the backbone,
+environment with PyTorch. With `eloftr` and `matchanything`, the grey
+inputs, the backbone,
 transformer and fine features and the matches are written, and
 `tests/reference_compare_eloftr.py` compares them stage by stage with
 *transformers*. With `I_COREGISTRATION_OPENCL_PROFILE` set,
@@ -340,6 +378,18 @@ g.region raster=wv3.5 -p
 i.coregistration.opencl group=hymap_rgb reference=wv3_rgb \
     points=gcp_hymap -n threshold=5
 v.db.univar map=gcp_hymap column=shift where="inlier = 1"
+```
+
+### Thermal or SWIR scene with MatchAnything
+
+Match a thermal (or short-wave infrared) composite against a visible
+reference with MatchAnything's cross-modal weights
+(downloaded into `~/models/matchanything` on the first run), with the same tight
+threshold:
+
+```sh
+i.coregistration.opencl group=tir_rgb reference=wv3_rgb \
+    points=gcp_tir -n matcher=matchanything threshold=5
 ```
 
 ## REFERENCES

@@ -23,10 +23,7 @@
 static const char *names[MODEL_NTYPES] = {"similarity", "affine", "homography",
                                           "poly2", "poly3"};
 
-const char *model_name(enum model_type t)
-{
-    return names[t];
-}
+const char *model_name(enum model_type t) { return names[t]; }
 
 int model_parse(const char *name)
 {

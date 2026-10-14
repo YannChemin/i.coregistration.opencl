@@ -57,17 +57,17 @@ def test_missing_checkpoint_offline(session, tmp_path):
         )
 
 
-def test_matchanything_weights_not_downloaded(session, tmp_path):
-    """Missing MatchAnything weights fail at once, with where to get
-    them, and are never downloaded (no -o needed)."""
+def test_matchanything_offline(session, tmp_path):
+    """Missing MatchAnything weights are not downloaded with -o."""
     tools = Tools(session=session)
 
-    with pytest.raises(ToolError, match="matchanything_eloftr"):
+    with pytest.raises(ToolError, match="not found"):
         tools.i_coregistration_opencl(
             group="img",
             reference="ref",
             matcher="matchanything",
             weights_dir=str(tmp_path),
+            flags="o",
         )
     assert not any(tmp_path.iterdir())
 

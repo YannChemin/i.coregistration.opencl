@@ -16,7 +16,7 @@
 # Settings through the environment: REMOTE (default yann@10.42.0.89),
 # RUSTICL (default radeonsi), BUILD=0 to reuse the server build,
 # BUILD_TAG to use the build of another tag, MODULE_ENV for variables
-# given to the module (e.g. MODULE_ENV=I_COREGISTRATION_OPENCL_NPE=1).
+# given to the module (e.g. MODULE_ENV=I_COREGISTRATION_OPENCL_PROFILE=1).
 
 set -euo pipefail
 

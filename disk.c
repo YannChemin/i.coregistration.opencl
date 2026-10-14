@@ -26,7 +26,7 @@
  * before the convolution; down blocks 1-4 average-pool first, up blocks
  * upsample the bottom input and concatenate the skip connection. */
 static const int layer_cin[DISK_LAYERS] = {3, 16, 32, 64, 64, 128, 128, 96, 80};
-static const int layer_cout[DISK_LAYERS] = {16, 32, 64, 64, 64,
+static const int layer_cout[DISK_LAYERS] = {16, 32, 64, 64,           64,
                                             64, 64, 64, DISK_DESC + 1};
 
 static cl_mem upload_tensor(struct disk_model *m, struct pth_file *pf,
@@ -94,9 +94,9 @@ void disk_alloc(struct disk_model *m, int H, int W, int nmax)
     m->nmax = nmax;
     m->input = ocl_alloc(m->ocl, 3 * px * sizeof(float), "input");
     for (k = 0; k < 5; k++)
-        m->f[k] = ocl_alloc(m->ocl,
-                            layer_cout[k] * (px >> (2 * k)) * sizeof(float),
-                            "down features");
+        m->f[k] =
+            ocl_alloc(m->ocl, layer_cout[k] * (px >> (2 * k)) * sizeof(float),
+                      "down features");
     for (k = 0; k < 3; k++)
         m->u[k] = ocl_alloc(m->ocl, 64 * (px >> (2 * (3 - k))) * sizeof(float),
                             "up features");
@@ -162,8 +162,8 @@ static int cmp_desc_float(const void *a, const void *b)
 }
 
 int disk_detect(struct disk_model *m, const float *img, int H, int W, int h,
-                int w, int n, float thresh, const unsigned char *valid,
-                int *xy, float *score, float *desc)
+                int w, int n, float thresh, const unsigned char *valid, int *xy,
+                float *score, float *desc)
 {
     size_t px = (size_t)H * W;
     cl_ulong off = (cl_ulong)DISK_DESC * px;
@@ -199,10 +199,9 @@ int disk_detect(struct disk_model *m, const float *img, int H, int W, int h,
         size_t plane = (size_t)hh * ww;
 
         upsample(m, bot, cb, hh / 2, ww / 2, m->cat, 0);
-        ocl_check(clEnqueueCopyBuffer(m->ocl->queue, hor, m->cat, 0,
-                                      cb * plane * sizeof(float),
-                                      ch * plane * sizeof(float), 0, NULL,
-                                      NULL),
+        ocl_check(clEnqueueCopyBuffer(
+                      m->ocl->queue, hor, m->cat, 0, cb * plane * sizeof(float),
+                      ch * plane * sizeof(float), 0, NULL, NULL),
                   "clEnqueueCopyBuffer");
         stats(m, m->cat, cb + ch, hh, ww);
         conv(m, l, m->cat, hh, ww, j < 3 ? m->u[j] : m->out);
@@ -267,7 +266,8 @@ int disk_detect(struct disk_model *m, const float *img, int H, int W, int h,
         clSetKernelArg(k, 5, sizeof(int), &nk);
         clSetKernelArg(k, 6, sizeof(cl_mem), &m->desc);
         run(m, k, 1, &g, NULL, "gather_desc");
-        ocl_read(m->ocl, m->desc, 0, desc, (size_t)nk * DISK_DESC * sizeof(float));
+        ocl_read(m->ocl, m->desc, 0, desc,
+                 (size_t)nk * DISK_DESC * sizeof(float));
     }
     return nk;
 }

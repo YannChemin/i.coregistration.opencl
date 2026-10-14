@@ -73,10 +73,7 @@ static void run1d(struct ops *o, cl_kernel k, size_t n, const char *what)
     ops_run(o->ocl, k, 1, &g, &l, what);
 }
 
-static size_t round_up(size_t v, size_t m)
-{
-    return (v + m - 1) / m * m;
-}
+static size_t round_up(size_t v, size_t m) { return (v + m - 1) / m * m; }
 
 /* Element counts passed as int to the kernels. */
 static cl_int count(long n, const char *what)
@@ -223,8 +220,8 @@ static void unfold_range(struct ops *o, cl_mem in, int C, int H, int W,
                          int n, cl_mem out)
 {
     cl_kernel k = o->unfold;
-    cl_int v[13] = {C,     H,     W,     g->kh, g->kw, g->sy, g->sx,
-                    g->py, g->px, Ho,    Wo,    l0,    n};
+    cl_int v[13] = {C,     H,     W,  g->kh, g->kw, g->sy, g->sx,
+                    g->py, g->px, Ho, Wo,    l0,    n};
     size_t gs[2] = {round_up((size_t)n, 64), (size_t)C * g->kh * g->kw},
            ls[2] = {64, 1};
     int i;
@@ -238,9 +235,9 @@ static void unfold_range(struct ops *o, cl_mem in, int C, int H, int W,
 
 /* Convolution as W (K, C kh kw) times the unfolded input, by blocks of
  * output positions that fit the scratch buffer. */
-static void conv_im2col(struct ops *o, cl_mem in, int C, int H, int W,
-                        cl_mem w, cl_mem b, int K, const struct conv_geom *g,
-                        int Ho, int Wo, int act, float slope, cl_mem out)
+static void conv_im2col(struct ops *o, cl_mem in, int C, int H, int W, cl_mem w,
+                        cl_mem b, int K, const struct conv_geom *g, int Ho,
+                        int Wo, int act, float slope, cl_mem out)
 {
     int Kc = C * g->kh * g->kw, L = Ho * Wo, l0;
     size_t cap = o->im2col_bytes < o->ocl->max_alloc ? o->im2col_bytes

@@ -39,7 +39,8 @@ static void nearest(const float *d1, int n1, const float *d2, int n2, int dim,
                     int *nn12, float *score, int *nn21)
 {
     float *dm = G_malloc((size_t)n1 * n2 * sizeof(float));
-    float *q1 = G_malloc(n1 * sizeof(float)), *q2 = G_malloc(n2 * sizeof(float));
+    float *q1 = G_malloc(n1 * sizeof(float)),
+          *q2 = G_malloc(n2 * sizeof(float));
     int i, j, k;
 
     for (i = 0; i < n1; i++) {
@@ -452,7 +453,7 @@ int adalam_match(const float *k1, const float *d1, int n1, const float *k2,
 
 #define HYPOTHESES(it)                                                         \
     for (r = 0; r < p.nr; r++) {                                               \
-        int a = p.off[r] + ca[it] % p.rd[r], b = p.off[r] + cb[it] % p.rd[r]; \
+        int a = p.off[r] + ca[it] % p.rd[r], b = p.off[r] + cb[it] % p.rd[r];  \
         double X[4] = {p.x[2 * a], p.x[2 * a + 1], p.x[2 * b],                 \
                        p.x[2 * b + 1]};                                        \
         double Y[4] = {p.y[2 * a], p.y[2 * a + 1], p.y[2 * b],                 \
@@ -558,8 +559,8 @@ int adalam_match(const float *k1, const float *d1, int n1, const float *k2,
                 eq[k] = to_half(sq[k]) == to_half(sq[k + 1]);
             eq[p.N - 1] = 0;
             duplicate_weights(eq, p.N, w0);
-            select_inliers(&p, sq, w0, cfg->min_confidence, best_cnt,
-                           best_bal, best_hi);
+            select_inliers(&p, sq, w0, cfg->min_confidence, best_cnt, best_bal,
+                           best_hi);
             memcpy(inl, idx, p.N * sizeof(int));
         }
     }

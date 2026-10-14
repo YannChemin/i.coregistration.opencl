@@ -208,7 +208,4 @@ double maxflow_solve(struct maxflow *g)
     return constant + flow;
 }
 
-int maxflow_label(const struct maxflow *g, int i)
-{
-    return !g->side[i];
-}
+int maxflow_label(const struct maxflow *g, int i) { return !g->side[i]; }
