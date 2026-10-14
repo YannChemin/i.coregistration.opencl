@@ -15,7 +15,8 @@
 #
 # Settings through the environment: REMOTE (default yann@10.42.0.89),
 # RUSTICL (default radeonsi), BUILD=0 to reuse the server build,
-# BUILD_TAG to use the build of another tag.
+# BUILD_TAG to use the build of another tag, MODULE_ENV for variables
+# given to the module (e.g. MODULE_ENV=I_COREGISTRATION_OPENCL_NPE=1).
 
 set -euo pipefail
 
@@ -26,6 +27,7 @@ SRC="$(cd "$HERE/../.." && pwd)"
 REMOTE="${REMOTE:-yann@10.42.0.89}"
 RUSTICL="${RUSTICL:-radeonsi}"
 BUILD="${BUILD:-1}"
+MODULE_ENV="${MODULE_ENV:-}"
 RBUILD="build/i.coregistration.opencl_${BUILD_TAG:-$TAG}"
 WORK="/tmp/coreg_eval_$TAG"
 OUT="$HERE/output/$TAG"
@@ -79,7 +81,7 @@ grass --tmp-project ${REMOTE_IMAGES[0]} --exec python3 $WORK/eval_$KIND.py ${REM
     --output $WORK/out --module \$HOME/$RBUILD/bin/i.coregistration.opencl --tag $TAG $EXTRA_Q
 EOS
 ssh -f -n -o ConnectTimeout=10 -o BatchMode=yes "$REMOTE" \
-    "cd $WORK && setsid nohup bash -c 'RUSTICL_ENABLE=$RUSTICL bash run.sh > eval.log 2>&1 && touch done || touch failed' >/dev/null 2>&1 &"
+    "cd $WORK && setsid nohup bash -c 'RUSTICL_ENABLE=$RUSTICL $MODULE_ENV bash run.sh > eval.log 2>&1 && touch done || touch failed' >/dev/null 2>&1 &"
 
 echo "== Running ($KIND)"
 while ! ssh_r "test -e $WORK/done -o -e $WORK/failed"; do

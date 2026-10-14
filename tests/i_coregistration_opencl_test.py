@@ -57,6 +57,21 @@ def test_missing_checkpoint_offline(session, tmp_path):
         )
 
 
+def test_matchanything_weights_not_downloaded(session, tmp_path):
+    """Missing MatchAnything weights fail at once, with where to get
+    them, and are never downloaded (no -o needed)."""
+    tools = Tools(session=session)
+
+    with pytest.raises(ToolError, match="matchanything_eloftr"):
+        tools.i_coregistration_opencl(
+            group="img",
+            reference="ref",
+            matcher="matchanything",
+            weights_dir=str(tmp_path),
+        )
+    assert not any(tmp_path.iterdir())
+
+
 def test_rejects_file_that_is_not_a_checkpoint(session, tmp_path):
     """A file that is neither a zip nor a legacy PyTorch checkpoint fails
     before any matching."""
@@ -181,3 +196,24 @@ def test_estimator_rejects_moved_object(session, checkpoint, platform):
     assert statistics.median(dx for dx, _ in active) == pytest.approx(SHIFT_X, abs=0.1)
     assert statistics.median(dy for _, dy in active) == pytest.approx(-SHIFT_Y, abs=0.1)
     assert not any(abs(dx - moved_dx) < 1.5 for dx, _ in active)
+
+
+def test_matchanything_recovers_known_shift(session, matchanything_weights, platform):
+    """MatchAnything's weights on the Efficient LoFTR network give the
+    known shift to a fraction of a cell."""
+    tools = Tools(session=session)
+    tools.i_coregistration_opencl(
+        group="img",
+        reference="ref",
+        matcher="matchanything",
+        checkpoint=matchanything_weights,
+        points="gcp_ma",
+        tile_size=256,
+        platform=platform,
+    )
+    rows = gs.vector_db_select("gcp_ma", columns="dx,dy", env=session.env)["values"]
+    assert len(rows) >= 100
+    dx = [float(r[0]) for r in rows.values()]
+    dy = [float(r[1]) for r in rows.values()]
+    assert statistics.median(dx) == pytest.approx(SHIFT_X, abs=0.1)
+    assert statistics.median(dy) == pytest.approx(-SHIFT_Y, abs=0.1)
