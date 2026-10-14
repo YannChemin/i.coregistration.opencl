@@ -40,14 +40,15 @@ static cl_mem upload_tensor(struct disk_model *m, struct pth_file *pf,
     return buf;
 }
 
-void disk_load(struct disk_model *m, struct ocl_backend *ocl,
-               struct pth_file *pf)
+void disk_load(struct disk_model *m, struct ops *ops, struct pth_file *pf)
 {
+    struct ocl_backend *ocl = ops->ocl;
     char name[128];
     int l;
 
     memset(m, 0, sizeof(*m));
     m->ocl = ocl;
+    m->ops = ops;
     progress_begin(PG_LOAD, pth_bytes(pf, "") / 1073741824.0);
     for (l = 0; l < DISK_LAYERS; l++) {
         long wshape[4] = {layer_cout[l], layer_cin[l], 5, 5};
@@ -76,10 +77,6 @@ void disk_load(struct disk_model *m, struct ocl_backend *ocl,
     }
     progress_end();
 
-    m->k_conv = ocl_kernel(ocl, "conv5x5");
-    m->k_stats = ocl_kernel(ocl, "chan_stats");
-    m->k_pool = ocl_kernel(ocl, "avgpool2");
-    m->k_up = ocl_kernel(ocl, "upsample2");
     m->k_nms = ocl_kernel(ocl, "nms5x5");
     m->k_gather = ocl_kernel(ocl, "gather_desc");
 }
@@ -116,27 +113,16 @@ void disk_alloc(struct disk_model *m, int H, int W, int nmax)
     m->maskh = G_malloc(px);
 }
 
-static size_t round_up(size_t v, size_t m) { return (v + m - 1) / m * m; }
-
 static void run(struct disk_model *m, cl_kernel k, int dims, const size_t *g,
                 const size_t *l, const char *what)
 {
-    ocl_check(clEnqueueNDRangeKernel(m->ocl->queue, k, dims, NULL, g, l, 0,
-                                     NULL, NULL),
-              what);
+    ops_run(m->ocl, k, dims, g, l, what);
 }
 
 /* Instance-norm statistics of a (C, H, W) tensor into m->mean, m->rstd. */
 static void stats(struct disk_model *m, cl_mem x, int C, int H, int W)
 {
-    int hw = H * W;
-    size_t g = (size_t)C * 256, l = 256;
-
-    clSetKernelArg(m->k_stats, 0, sizeof(cl_mem), &x);
-    clSetKernelArg(m->k_stats, 1, sizeof(int), &hw);
-    clSetKernelArg(m->k_stats, 2, sizeof(cl_mem), &m->mean);
-    clSetKernelArg(m->k_stats, 3, sizeof(cl_mem), &m->rstd);
-    run(m, m->k_stats, 1, &g, &l, "chan_stats");
+    ops_chan_stats(m->ops, x, C, H * W, 1e-5f, m->mean, m->rstd);
 }
 
 /* Convolution of layer l on in (cin, H, W) into out (cout, H, W), with
@@ -145,51 +131,27 @@ static void stats(struct disk_model *m, cl_mem x, int C, int H, int W)
 static void conv(struct disk_model *m, int l, cl_mem in, int H, int W,
                  cl_mem out)
 {
-    int norm = l > 0;
-    cl_mem alpha = norm ? m->alpha[l] : m->w[l];
-    size_t g[3] = {round_up(W, 16), round_up(H, 16),
-                   (size_t)(m->cout[l] + 7) / 8};
-    size_t lw[3] = {16, 16, 1};
-    cl_kernel k = m->k_conv;
+    struct conv_geom g = ops_geom(5, 1, 2);
 
-    clSetKernelArg(k, 0, sizeof(cl_mem), &in);
-    clSetKernelArg(k, 1, sizeof(int), &m->cin[l]);
-    clSetKernelArg(k, 2, sizeof(int), &H);
-    clSetKernelArg(k, 3, sizeof(int), &W);
-    clSetKernelArg(k, 4, sizeof(cl_mem), &m->w[l]);
-    clSetKernelArg(k, 5, sizeof(cl_mem), &m->b[l]);
-    clSetKernelArg(k, 6, sizeof(int), &m->cout[l]);
-    clSetKernelArg(k, 7, sizeof(cl_mem), &m->mean);
-    clSetKernelArg(k, 8, sizeof(cl_mem), &m->rstd);
-    clSetKernelArg(k, 9, sizeof(cl_mem), &alpha);
-    clSetKernelArg(k, 10, sizeof(int), &norm);
-    clSetKernelArg(k, 11, sizeof(cl_mem), &out);
-    run(m, k, 3, g, lw, "conv5x5");
+    if (l > 0)
+        ops_conv2d(m->ops, in, m->cin[l], H, W, m->w[l], m->b[l], m->cout[l],
+                   &g, m->mean, m->rstd, m->alpha[l], ACT_NONE, 0, out);
+    else
+        ops_conv2d(m->ops, in, m->cin[l], H, W, m->w[l], m->b[l], m->cout[l],
+                   &g, NULL, NULL, NULL, ACT_NONE, 0, out);
 }
 
 static void pool(struct disk_model *m, cl_mem in, int C, int H, int W,
                  cl_mem out)
 {
-    size_t g[3] = {(size_t)W / 2, (size_t)H / 2, (size_t)C};
-
-    clSetKernelArg(m->k_pool, 0, sizeof(cl_mem), &in);
-    clSetKernelArg(m->k_pool, 1, sizeof(int), &H);
-    clSetKernelArg(m->k_pool, 2, sizeof(int), &W);
-    clSetKernelArg(m->k_pool, 3, sizeof(cl_mem), &out);
-    run(m, m->k_pool, 3, g, NULL, "avgpool2");
+    ops_avgpool2(m->ops, in, C, H, W, out);
 }
 
+/* 2x bilinear upsampling (scale_factor 2) into channels coff.. of out. */
 static void upsample(struct disk_model *m, cl_mem in, int C, int h, int w,
                      cl_mem out, int coff)
 {
-    size_t g[3] = {(size_t)2 * w, (size_t)2 * h, (size_t)C};
-
-    clSetKernelArg(m->k_up, 0, sizeof(cl_mem), &in);
-    clSetKernelArg(m->k_up, 1, sizeof(int), &h);
-    clSetKernelArg(m->k_up, 2, sizeof(int), &w);
-    clSetKernelArg(m->k_up, 3, sizeof(cl_mem), &out);
-    clSetKernelArg(m->k_up, 4, sizeof(int), &coff);
-    run(m, m->k_up, 3, g, NULL, "upsample2");
+    ops_resize(m->ops, in, C, h, w, out, 2 * h, 2 * w, coff, 0, 2.0f);
 }
 
 static int cmp_desc_float(const void *a, const void *b)
@@ -332,11 +294,7 @@ void disk_free(struct disk_model *m)
     ocl_release(&m->mask);
     ocl_release(&m->xy);
     ocl_release(&m->desc);
-    if (m->k_conv) {
-        clReleaseKernel(m->k_conv);
-        clReleaseKernel(m->k_stats);
-        clReleaseKernel(m->k_pool);
-        clReleaseKernel(m->k_up);
+    if (m->k_nms) {
         clReleaseKernel(m->k_nms);
         clReleaseKernel(m->k_gather);
     }

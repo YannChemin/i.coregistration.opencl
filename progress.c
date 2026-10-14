@@ -157,6 +157,8 @@ void progress_end(void)
     report();
 }
 
+double progress_seconds(enum progress_kind k) { return pg.seconds[k]; }
+
 void progress_finish(void)
 {
     if (pg.cur >= 0)

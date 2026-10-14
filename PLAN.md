@@ -76,6 +76,19 @@ the first implementation; `main.c` loops over tiles once for all.
 Deliverable: refactor with no change of results (reference_compare and
 pytest unchanged), eval report for v0.
 
+Status (2026-10-14): done. `ops.cl`/`ops.c` (40 cases within 3e-6 of
+PyTorch on the WX 7100, `tests/ops_check.c` + `tests/ops_compare.py`),
+`matcher.h` with `matcher_disk.c` and a `matcher=` option, `tests/eval/`
+(synthetic and real-pair scripts, `run_server.sh`). Dumps and control
+points bit-identical to v0 on 25 tiles; pytest 5/5 on the server; same
+speed (1 min 45 s for 25 tiles). Not done: a separate fast 3x3 or
+im2col path for ELoFTR's convolutions (left to phase 2, when its sizes
+are known), and the cross-modal eval pair (needs the hyperspectral
+composite exported as a GeoTIFF). Baseline and findings in
+`tests/eval/README.md`; the main one for phase 1: moved aircraft-sized
+objects pass AdaLAM (13 % of points) and bring about 7 % of wrong ground
+points with them.
+
 ## Phase 1. Robust estimation stage (CPU, C)
 
 Goal: a model fitted to the matches, with per-point weights and

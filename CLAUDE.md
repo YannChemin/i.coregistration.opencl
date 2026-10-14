@@ -22,13 +22,19 @@ state, how to build, test and run, and what is still to be decided.
   off). That work belongs to the Tucson report, not to this repository
   (`~/Documents/LaTex/Report/20261008_Spectra_Forensic_Tucson_boneyard`,
   scripts 22_coreg_server.sh, 04c_coreg_field.py, basemap_field.py).
-- The user commits; leave changes uncommitted unless asked. At handoff,
-  uncommitted: README.md, TODO.md, PLAN.md, this file, a test fix.
+- The user commits (often, as "update"); leave changes uncommitted
+  unless asked.
+- Phase 0 done (2026-10-14): `ops.cl`/`ops.c`/`ops.h` (generic kernels,
+  checked against PyTorch by `tests/ops_check.c` + `tests/ops_compare.py`:
+  40/40 on the WX 7100), `matcher.h` interface with `matcher_disk.c`,
+  `matcher=` option (one choice), `--verbose` stage timing,
+  `tests/eval/` harness. Bit-identical to v0 on 25 Tucson tiles (all
+  dumps and the control point table). Baseline numbers in
+  `tests/eval/README.md`.
 
 ## Next step
 
-PLAN.md phase 0 (shared kernel library, matcher interface, evaluation
-harness), then phase 1 (robust estimation). Ask the user about the four
+PLAN.md phase 1 (robust estimation). Ask the user about the four
 decisions at the end of PLAN.md before phases 3-4 (DINOv3 licence for
 RoMa v2; download of ELoFTR/MatchAnything weights; MatchAnything in the
 published addon or not; order). Their answers are not known yet.
@@ -51,12 +57,22 @@ published addon or not; order). Their answers are not known yet.
   (that venv has kornia 0.8.3 over the system torch 2.6). Build one such
   comparison per new network, stage by stage.
 - Laptop OpenCL is PoCL on the CPU only (one 1024 tile pair: about 4 min).
-  Real runs go to the GPU server `yann@10.42.0.89` (debiantest, AMD
-  Radeon Pro WX 7100, 16 GiB, Mesa rusticl: export
+  The user wants every OpenCL run (tests included) on the GPU server, not
+  on the laptop (faster, and it does not clutter the PC); build locally
+  only to check compilation. The server is `yann@10.42.0.89`
+  (debiantest, AMD Radeon Pro WX 7100, 16 GiB, Mesa rusticl: export
   `RUSTICL_ENABLE=radeonsi`; max buffer 2 GiB). Build there into
   `~/build/<module>_<tag>` (never overwrite the user's `~/dev` copies),
-  `make MODULE_TOPDIR=/usr/local/grass86 OCLLIB=-lOpenCL`. Model weights
-  live in `~/models/<name>` on both machines (mirrored).
+  `make MODULE_TOPDIR=/usr/local/grass86 OCLLIB=-lOpenCL`, adding
+  `BIN=$HOME/<dir>/bin HTMLDIR=... MDDIR=... MANBASEDIR=...` so that the
+  installed module (/usr/local/grass86/bin, used by the Tucson report)
+  stays v0; `tests/eval/run_server.sh` does all this. Inside a GRASS
+  session, put the build's bin first in PATH from within the session
+  (`grass ... --exec bash -c 'PATH=...:$PATH ...'`): GRASS prepends its
+  own bin. No torch on the server: run `ops_check` there and
+  `tests/ops_compare.py` on the laptop. The first run after a kernel
+  change takes about 3 min more (rusticl compiles, then caches). Model
+  weights live in `~/models/<name>` on both machines (mirrored).
 - Confidential data: anything copied to the server goes to a private
   `/tmp/<job>` folder (mode 700) and is deleted after the run; check no
   `.gislock` or dead `/tmp/grass8-*` is left. Detach long remote runs

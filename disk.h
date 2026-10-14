@@ -4,6 +4,7 @@
 #define I_COREGISTRATION_OPENCL_DISK_H
 
 #include "ocl_backend.h"
+#include "ops.h"
 #include "pth_loader.h"
 
 #define DISK_DESC 128   /* Descriptor dimension. */
@@ -15,9 +16,10 @@
  * with its pretrained weights, heatmap NMS and descriptor sampling. */
 struct disk_model {
     struct ocl_backend *ocl;
+    struct ops *ops;
     int cin[DISK_LAYERS], cout[DISK_LAYERS];
     cl_mem w[DISK_LAYERS], b[DISK_LAYERS], alpha[DISK_LAYERS];
-    cl_kernel k_conv, k_stats, k_pool, k_up, k_nms, k_gather;
+    cl_kernel k_nms, k_gather;
     /* Work buffers for tiles of up to H x W cells. */
     int H, W, nmax;
     cl_mem input, f[5], u[3], tmp, cat, out, mean, rstd, mask, xy, desc;
@@ -27,9 +29,9 @@ struct disk_model {
 
 /* Read the DISK weights (the "extractor" state_dict of depth-save.pth or
  * epipolar-save.pth, or a bare state_dict with the same names) and
- * upload them. Fatal on any missing tensor or shape mismatch. */
-void disk_load(struct disk_model *m, struct ocl_backend *ocl,
-               struct pth_file *pf);
+ * upload them; the U-Net runs on the kernels of ops. Fatal on any
+ * missing tensor or shape mismatch. */
+void disk_load(struct disk_model *m, struct ops *ops, struct pth_file *pf);
 
 /* Allocate work buffers for tiles of up to H x W cells (multiples of
  * DISK_MULTIPLE) and up to nmax keypoints. */

@@ -14,8 +14,18 @@ include $(MODULE_TOPDIR)/include/Make/Module.make
 
 default: cmd
 
-# Embed the OpenCL kernels as a C string literal.
-$(OBJDIR)/ocl_backend.o: $(OBJDIR)/disk_kernels_cl.h
+# Embed the OpenCL kernels as C string literals.
+$(OBJDIR)/ocl_backend.o: $(OBJDIR)/ops_cl.h $(OBJDIR)/disk_kernels_cl.h
 
-$(OBJDIR)/disk_kernels_cl.h: disk_kernels.cl | $(OBJDIR)
+$(OBJDIR)/%_cl.h: %.cl | $(OBJDIR)
 	sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/^/"/' -e 's/$$/\\n"/' $< > $@
+
+# Developer check of the generic kernels against PyTorch (not installed):
+# make ops_check, then tests/ops_compare.py on its output.
+ops_check: $(OBJDIR)/ops_check
+
+$(OBJDIR)/ops_check: tests/ops_check.c $(OBJDIR)/ops.o $(OBJDIR)/ocl_backend.o
+	$(CC) $(ALL_CFLAGS) -I. -o $@ $< $(OBJDIR)/ops.o $(OBJDIR)/ocl_backend.o \
+		$(LDFLAGS) $(LIBES) $(EXTRA_LIBS) $(MATHLIB)
+
+.PHONY: ops_check

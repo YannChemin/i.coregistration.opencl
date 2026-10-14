@@ -8,6 +8,9 @@ they are matched by nearest neighbour and the matches filtered with
 AdaLAM, which keeps those that agree with a local affine transformation
 around confident seed matches. Neither Python nor PyTorch is needed at
 run time.</p>
+<p>The matching method is chosen with <b>matcher</b>. DISK with AdaLAM
+(<code>disk</code>) is the only one so far; detector-free and dense matchers will
+be added as further choices, with the same outputs.</p>
 <p>The module is a translation to C and OpenCL of the RS_coreg_LoFTR
 workflow (DISK features, AdaLAM matching, control points, thin plate
 spline warp with <em>gdalwarp</em>), made for images that are already roughly
@@ -125,12 +128,20 @@ driver, e.g. <code>RUSTICL_ENABLE=radeonsi</code>.</p>
 image. On one 1024 x 1024 tile, a laptop CPU (PoCL, 4 cores) took about
 four minutes for both images. The memory needed on the device grows with
 the tile area: about 1.2 GiB for 1024-cell tiles.</p>
+<p>On an AMD Radeon Pro WX 7100 GPU (Mesa rusticl), a 1024 x 1024 tile
+took about four seconds for both images, matching included (25 tiles in
+1 min 45 s). The first run after an installation is a few minutes
+longer, while the driver compiles the kernels; it keeps them in its
+cache afterwards. With <b>--verbose</b>, the time spent on the device and
+in matching is reported at the end.</p>
 <h3>Debugging aids</h3>
 <p>With the environment variable <code>I_COREGISTRATION_OPENCL_DUMP</code> set to a
 folder, each tile's DISK inputs, keypoints with their scores and
 descriptors, and AdaLAM matches are written there;
 <code>tests/reference_compare.py</code> compares them with <em>kornia</em> in a Python
-environment with PyTorch.</p>
+environment with PyTorch. With <code>I_COREGISTRATION_OPENCL_PROFILE</code> set,
+every OpenCL kernel is timed and the totals per kernel are reported at
+the end (this slows the run down).</p>
 <h2>EXAMPLES</h2>
 <h3>Two basemaps of different dates</h3>
 <p>Co-register a Google basemap to an ESRI one, dropping matches on

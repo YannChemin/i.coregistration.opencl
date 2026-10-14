@@ -18,10 +18,16 @@
 
 #include "ocl_backend.h"
 
-/* disk_kernels.cl, turned into a string literal by the Makefile. */
-static const char *disk_kernel_source =
+/* The kernel sources, turned into string literals by the Makefile and
+ * built as one program: the generic tensor kernels (ops.cl) first, then
+ * each model's own. */
+static const char *kernel_sources[] = {
+#include "ops_cl.h"
+    ,
 #include "disk_kernels_cl.h"
-    ;
+};
+
+#define NSOURCES (sizeof(kernel_sources) / sizeof(kernel_sources[0]))
 
 const char *ocl_errstr(cl_int err)
 {
@@ -132,8 +138,7 @@ static int list_devices(cl_device_type type, const char *platform_opt,
 static int try_device(struct ocl_backend *ocl, const struct candidate *c,
                       char **log)
 {
-    const char *src = disk_kernel_source;
-    size_t len = strlen(src);
+    size_t len[NSOURCES], i;
     char version[128];
     const char *opts;
     cl_device_type type;
@@ -169,7 +174,10 @@ static int try_device(struct ocl_backend *ocl, const struct candidate *c,
         ocl->context, c->device, ocl->profile ? CL_QUEUE_PROFILING_ENABLE : 0,
         &err);
     ocl_check(err, "clCreateCommandQueue");
-    ocl->program = clCreateProgramWithSource(ocl->context, 1, &src, &len, &err);
+    for (i = 0; i < NSOURCES; i++)
+        len[i] = strlen(kernel_sources[i]);
+    ocl->program = clCreateProgramWithSource(ocl->context, NSOURCES,
+                                             kernel_sources, len, &err);
     ocl_check(err, "clCreateProgramWithSource");
 
     err = clBuildProgram(ocl->program, 1, &c->device, opts, NULL, NULL);

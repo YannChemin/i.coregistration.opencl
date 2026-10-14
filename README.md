@@ -9,10 +9,24 @@ OpenCL translation of
 DISK + AdaLAM, then `gdalwarp -tps`): no Python or PyTorch at run time,
 the published DISK weights are read directly (legacy PyTorch format).
 
-See `i.coregistration.opencl.md` for the manual and `TODO.md` for the
+See `i.coregistration.opencl.md` for the manual, `TODO.md` for the
 planned matchers (Efficient LoFTR, RoMa v2, MatchAnything) and robust
 estimators (MAGSAC++, Graph-Cut RANSAC, VSAC, SupeRANSAC, dense match
-summarization).
+summarization), and `PLAN.md` for the order of the work.
+
+## Layout
+
+- `main.c`: options, tiles, filters, refinement, output.
+- `matcher.h`, `matcher.c`: the matcher interface (device stage, host
+  matching, dumps); `matcher_disk.c`: DISK + AdaLAM behind it.
+- `ops.cl`, `ops.c`, `ops.h`: generic tensor kernels shared by the
+  matchers (GEMM, convolutions, normalizations, activations, softmax,
+  blockwise attention, RoPE, bilinear resizing, `grid_sample`, unfold,
+  pooling, transpose).
+- `disk.c`, `disk_kernels.cl`: the DISK network and its own kernels;
+  `adalam.c`: AdaLAM; `gcp.c`: control points; `image.c`: input bands.
+- `ocl_backend.c`, `pth_loader.c`, `download.c`, `progress.c`: device,
+  checkpoints, downloads, progress (from i.sam.opencl).
 
 ## Build
 
@@ -46,6 +60,20 @@ I_COREGISTRATION_OPENCL_CHECKPOINT=~/models/disk/depth-save.pth \
 ```
 
 Without the checkpoint variable, only the argument checks run.
+
+The generic kernels are checked against PyTorch with a separate program:
+
+```sh
+make MODULE_TOPDIR=/usr/local/grass86 OCLLIB=-lOpenCL ops_check
+OBJ.*/ops_check /tmp/ops [gpu [platform]]     # on the OpenCL machine
+python3 tests/ops_compare.py /tmp/ops          # where torch is installed
+```
+
+`tests/eval/` holds the evaluation harness (synthetic warps with a known
+field, real image pairs with leave-one-out residuals and loop closure),
+run on the GPU server by `tests/eval/run_server.sh`; see
+`tests/eval/README.md`.
+
 `tests/reference_compare.py` compares one tile with kornia (DISK
 keypoints, scores and descriptors, AdaLAM matches) from the dump written
 with `I_COREGISTRATION_OPENCL_DUMP=<folder>`. On a 1024 x 1024 basemap

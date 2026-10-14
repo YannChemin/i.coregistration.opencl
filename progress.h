@@ -13,7 +13,7 @@ enum progress_kind {
     PG_READ,  /* Input bands, in millions of cells. */
     PG_LOAD,  /* Checkpoint tensors, in GiB. */
     PG_BUILD, /* OpenCL program build. */
-    PG_TILE,  /* DISK on one tile of both images, in tiles. */
+    PG_TILE,  /* The matcher's device stage on one tile, in tiles. */
     PG_MATCH, /* Matching and AdaLAM filtering, in tiles. */
     PG_WRITE, /* Control points and vector output. */
     PG_NKINDS
@@ -30,6 +30,9 @@ void progress_end(void);
 
 /* Bytes read from the checkpoint, advancing an open PG_LOAD stage. */
 void progress_bytes(size_t n);
+
+/* Seconds spent so far in the closed stages of one kind. */
+double progress_seconds(enum progress_kind k);
 
 /* Report 100 %. */
 void progress_finish(void);

@@ -28,7 +28,10 @@
 #include "download.h"
 #include "gcp.h"
 #include "image.h"
+#include "matcher.h"
+#include "matcher_disk.h"
 #include "ocl_backend.h"
+#include "ops.h"
 #include "progress.h"
 #include "pth_loader.h"
 
@@ -80,40 +83,10 @@ static void tile_input(const struct rgb_image *img, int x0, int y0, int w,
         }
 }
 
-/* Developer aid: with I_COREGISTRATION_OPENCL_DUMP set to a folder, each
- * tile's DISK inputs (3 x H x W float32 per image), keypoints (x, y,
- * score, then the descriptor, float32 per keypoint) and AdaLAM matches
- * (i1 i2 dist) are written there, for tests/reference_compare.py. */
-static void dump_tile(const char *dir, int t, const char *what,
-                      const void *data, size_t bytes)
-{
-    char path[GPATH_MAX];
-    FILE *fp;
-
-    snprintf(path, sizeof(path), "%s/tile%03d_%s", dir, t, what);
-    if (!(fp = fopen(path, "wb")) || fwrite(data, 1, bytes, fp) != bytes)
-        G_fatal_error(_("Unable to write debug dump <%s>"), path);
-    fclose(fp);
-}
-
-static void dump_keypoints(const char *dir, int t, const char *what,
-                           const int *xy, const float *score, const float *desc,
-                           int n)
-{
-    size_t row = 3 + DISK_DESC;
-    float *v = G_malloc((n + 1) * row * sizeof(float));
-    int i;
-
-    for (i = 0; i < n; i++) {
-        v[i * row] = xy[2 * i];
-        v[i * row + 1] = xy[2 * i + 1];
-        v[i * row + 2] = score[i];
-        memcpy(v + i * row + 3, desc + (size_t)i * DISK_DESC,
-               DISK_DESC * sizeof(float));
-    }
-    dump_tile(dir, t, what, v, n * row * sizeof(float));
-    G_free(v);
-}
+/* Developer aid: with I_COREGISTRATION_OPENCL_DUMP set to a folder, the
+ * matcher writes each tile's inputs and intermediate results there (for
+ * DISK: inputs, keypoints and AdaLAM matches, read by
+ * tests/reference_compare.py). */
 
 static int cmp_double(const void *a, const void *b)
 {
@@ -134,11 +107,11 @@ int main(int argc, char *argv[])
 {
     struct GModule *module;
     struct {
-        struct Option *group, *subgroup, *reference, *ref_subgroup,
-            *checkpoint, *weights_dir, *model, *points, *percentile,
-            *features, *tile_size, *tile_overlap, *area_ratio,
-            *search_expansion, *ransac_iters, *min_inliers, *min_confidence,
-            *max_shift, *tolerance, *device, *platform;
+        struct Option *group, *subgroup, *reference, *ref_subgroup, *matcher,
+            *checkpoint, *weights_dir, *model, *points, *percentile, *features,
+            *tile_size, *tile_overlap, *area_ratio, *search_expansion,
+            *ransac_iters, *min_inliers, *min_confidence, *max_shift,
+            *tolerance, *device, *platform;
     } opt;
     struct {
         struct Flag *mnn, *refine, *dry, *offline;
@@ -146,16 +119,18 @@ int main(int argc, char *argv[])
     struct Cell_head win;
     struct rgb_image src, ref;
     struct ocl_backend ocl;
+    struct ops ops;
     struct pth_file pf;
-    struct disk_model disk;
-    struct adalam_config cfg;
+    struct matcher matcher;
+    struct disk_matcher_config dcfg;
+    struct adalam_config *cfg = &dcfg.adalam;
+    struct match_list ml = {0, 0, NULL};
     struct gcp_list gl = {0, 0, NULL};
     char *ckpt = NULL;
     int stretch = 0, tile, overlap, step, nfeat, ntx, nty, tx, ty, t = 0;
-    int H, W, nraw = 0, nshift = 0, ntol = 0, nref = 0;
+    int H, W, multiple, nraw = 0, nshift = 0, ntol = 0, nref = 0;
     double lo = 0, hi = 100, max_shift = 0, tol = 0;
-    float *img1, *img2, *k1, *k2, *s1, *s2, *d1, *d2;
-    int *xy1, *xy2;
+    float *img1, *img2;
     unsigned char *v1, *v2;
     const char *dump;
 
@@ -201,6 +176,17 @@ int main(int argc, char *argv[])
     opt.points->description =
         _("Name for output vector map of the control points (at their "
           "reference positions, with source position and shift)");
+
+    opt.matcher = G_define_option();
+    opt.matcher->key = "matcher";
+    opt.matcher->type = TYPE_STRING;
+    opt.matcher->options = "disk";
+    opt.matcher->answer = "disk";
+    opt.matcher->description = _("Matching method");
+    G_asprintf((char **)&opt.matcher->descriptions, "disk;%s",
+               _("DISK keypoints matched and filtered by AdaLAM, on whole "
+                 "cells (refined with -s)"));
+    opt.matcher->guisection = _("Model");
 
     opt.checkpoint = G_define_standard_option(G_OPT_F_INPUT);
     opt.checkpoint->key = "checkpoint";
@@ -380,8 +366,10 @@ int main(int argc, char *argv[])
             G_fatal_error(_("percentile= must satisfy 0 <= low < high <= 100"));
         stretch = 1;
     }
+    /* Only DISK so far (matcher= has one choice). */
+    multiple = DISK_MULTIPLE;
     tile = atoi(opt.tile_size->answer);
-    tile = (tile + DISK_MULTIPLE - 1) / DISK_MULTIPLE * DISK_MULTIPLE;
+    tile = (tile + multiple - 1) / multiple * multiple;
     overlap = atoi(opt.tile_overlap->answer);
     if (overlap < 0 || overlap >= tile / 2)
         G_fatal_error(_("tile_overlap= must lie in 0..%d"), tile / 2 - 1);
@@ -391,14 +379,16 @@ int main(int argc, char *argv[])
         G_fatal_error(_("max_shift= must be positive"));
     if (opt.tolerance->answer && (tol = atof(opt.tolerance->answer)) <= 0)
         G_fatal_error(_("tolerance= must be positive"));
-    adalam_defaults(&cfg);
-    cfg.area_ratio = atof(opt.area_ratio->answer);
-    cfg.search_expansion = atof(opt.search_expansion->answer);
-    cfg.ransac_iters = atoi(opt.ransac_iters->answer);
-    cfg.min_inliers = atoi(opt.min_inliers->answer);
-    cfg.min_confidence = atof(opt.min_confidence->answer);
-    cfg.force_seed_mnn = flag.mnn->answer;
-    if (cfg.area_ratio <= 0 || cfg.search_expansion <= 0)
+    dcfg.features = nfeat;
+    dcfg.threshold = 0.0f;
+    adalam_defaults(cfg);
+    cfg->area_ratio = atof(opt.area_ratio->answer);
+    cfg->search_expansion = atof(opt.search_expansion->answer);
+    cfg->ransac_iters = atoi(opt.ransac_iters->answer);
+    cfg->min_inliers = atoi(opt.min_inliers->answer);
+    cfg->min_confidence = atof(opt.min_confidence->answer);
+    cfg->force_seed_mnn = flag.mnn->answer;
+    if (cfg->area_ratio <= 0 || cfg->search_expansion <= 0)
         G_fatal_error(_("area_ratio= and search_expansion= must be positive"));
 
     /* The checkpoint, before any long reading. */
@@ -444,37 +434,32 @@ int main(int argc, char *argv[])
 
     progress_begin(PG_BUILD, 1);
     ocl_init(&ocl, opt.device->answer, opt.platform->answer);
+    ops_init(&ops, &ocl);
     progress_end();
     pth_open(&pf, ckpt);
-    disk_load(&disk, &ocl, &pf);
+    matcher_disk_create(&matcher, &ops, &pf, &dcfg);
     pth_close(&pf);
 
-    H = win.rows < tile ? (win.rows + 15) / 16 * 16 : tile;
-    W = win.cols < tile ? (win.cols + 15) / 16 * 16 : tile;
-    disk_alloc(&disk, H, W, nfeat);
+    H = win.rows < tile ? (win.rows + multiple - 1) / multiple * multiple
+                        : tile;
+    W = win.cols < tile ? (win.cols + multiple - 1) / multiple * multiple
+                        : tile;
+    matcher.alloc(&matcher, H, W);
     img1 = G_malloc(3 * (size_t)H * W * sizeof(float));
     img2 = G_malloc(3 * (size_t)H * W * sizeof(float));
     v1 = G_malloc((size_t)H * W);
     v2 = G_malloc((size_t)H * W);
-    xy1 = G_malloc(2 * nfeat * sizeof(int));
-    xy2 = G_malloc(2 * nfeat * sizeof(int));
-    k1 = G_malloc(2 * nfeat * sizeof(float));
-    k2 = G_malloc(2 * nfeat * sizeof(float));
-    s1 = G_malloc(nfeat * sizeof(float));
-    s2 = G_malloc(nfeat * sizeof(float));
-    d1 = G_malloc((size_t)nfeat * DISK_DESC * sizeof(float));
-    d2 = G_malloc((size_t)nfeat * DISK_DESC * sizeof(float));
 
-    G_message(_("Matching %d tile(s) of %d x %d cells..."), ntx * nty, tile,
-              tile);
+    G_message(_("Matching %d tile(s) of %d x %d cells with <%s>..."), ntx * nty,
+              tile, tile, matcher.name);
     dump = getenv("I_COREGISTRATION_OPENCL_DUMP");
     if (dump && !*dump)
         dump = NULL;
     for (ty = 0; ty < nty; ty++)
         for (tx = 0; tx < ntx; tx++) {
-            int x0 = tx * step, y0 = ty * step, w, h, n1, n2, nm, *pairs, i;
+            int x0 = tx * step, y0 = ty * step, w, h, nm, i;
             int first = gl.n;
-            float *dist;
+            struct matcher_tile mt;
             double *ddx, *ddy, mdx = 0, mdy = 0;
 
             /* The last tiles end on the region's edge. */
@@ -489,52 +474,35 @@ int main(int argc, char *argv[])
             progress_begin(PG_TILE, 1);
             tile_input(&src, x0, y0, w, h, H, W, img1, v1);
             tile_input(&ref, x0, y0, w, h, H, W, img2, v2);
-            n1 = disk_detect(&disk, img1, H, W, h, w, nfeat, 0.0f, v1, xy1, s1,
-                             d1);
-            n2 = disk_detect(&disk, img2, H, W, h, w, nfeat, 0.0f, v2, xy2, s2,
-                             d2);
+            mt.img1 = img1;
+            mt.img2 = img2;
+            mt.valid1 = v1;
+            mt.valid2 = v2;
+            mt.H = H;
+            mt.W = W;
+            mt.h = h;
+            mt.w = w;
+            mt.x0 = x0;
+            mt.y0 = y0;
+            mt.index = t;
+            matcher.run(&matcher, &mt);
             progress_end();
 
             progress_begin(PG_MATCH, 1);
-            for (i = 0; i < 2 * n1; i++)
-                k1[i] = xy1[i];
-            for (i = 0; i < 2 * n2; i++)
-                k2[i] = xy2[i];
-            nm = adalam_match(k1, d1, n1, k2, d2, n2, DISK_DESC, &cfg, &pairs,
-                              &dist);
+            ml.n = 0;
+            nm = matcher.match(&matcher, &mt, &ml);
             nraw += nm;
-            if (dump) {
-                char info[GPATH_MAX];
-                FILE *fp;
+            if (dump)
+                matcher.dump(&matcher, &mt, dump);
 
-                dump_tile(dump, t, "src_input.f32", img1,
-                          3 * (size_t)H * W * sizeof(float));
-                dump_tile(dump, t, "ref_input.f32", img2,
-                          3 * (size_t)H * W * sizeof(float));
-                dump_keypoints(dump, t, "src_kp.f32", xy1, s1, d1, n1);
-                dump_keypoints(dump, t, "ref_kp.f32", xy2, s2, d2, n2);
-                snprintf(info, sizeof(info), "%s/tile%03d_matches.txt", dump, t);
-                if (!(fp = fopen(info, "w")))
-                    G_fatal_error(_("Unable to write debug dump <%s>"), info);
-                fprintf(fp, "# x0 %d y0 %d w %d h %d H %d W %d\n", x0, y0, w,
-                        h, H, W);
-                for (i = 0; i < nm; i++)
-                    fprintf(fp, "%d %d %.9g\n", pairs[2 * i], pairs[2 * i + 1],
-                            dist[i]);
-                fclose(fp);
-            }
-            G_debug(1, "tile %d (%d, %d): %d + %d keypoints, %d matches", t,
-                    x0, y0, n1, n2, nm);
-
-            for (i = 0; i < nm; i++) {
+            for (i = 0; i < ml.n; i++) {
                 struct gcp g;
-                int a = pairs[2 * i], b = pairs[2 * i + 1];
 
-                g.xs = x0 + xy1[2 * a];
-                g.ys = y0 + xy1[2 * a + 1];
-                g.xr = x0 + xy2[2 * b];
-                g.yr = y0 + xy2[2 * b + 1];
-                g.dist = dist[i];
+                g.xs = x0 + ml.v[i].x1;
+                g.ys = y0 + ml.v[i].y1;
+                g.xr = x0 + ml.v[i].x2;
+                g.yr = y0 + ml.v[i].y2;
+                g.dist = ml.v[i].cost;
                 g.tile = t;
                 g.refined = 0;
                 g.n = 1;
@@ -546,8 +514,6 @@ int main(int argc, char *argv[])
                 }
                 gcp_add(&gl, &g);
             }
-            G_free(pairs);
-            G_free(dist);
 
             /* Matches far from their tile's median shift. */
             if (tol > 0 && gl.n > first) {
@@ -582,20 +548,20 @@ int main(int argc, char *argv[])
             progress_end();
         }
 
-    disk_free(&disk);
+    matcher.destroy(&matcher);
+    G_verbose_message(_("Timing: device stage %.1f s, matching and filters "
+                        "%.1f s, for %d tile(s)"),
+                      progress_seconds(PG_TILE), progress_seconds(PG_MATCH),
+                      ntx * nty);
+    if (ocl.profile)
+        ops_report();
+    ops_free(&ops);
     ocl_free(&ocl);
     G_free(img1);
     G_free(img2);
     G_free(v1);
     G_free(v2);
-    G_free(xy1);
-    G_free(xy2);
-    G_free(k1);
-    G_free(k2);
-    G_free(s1);
-    G_free(s2);
-    G_free(d1);
-    G_free(d2);
+    G_free(ml.v);
 
     progress_begin(PG_WRITE, 1);
     {
