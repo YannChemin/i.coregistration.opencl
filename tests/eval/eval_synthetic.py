@@ -126,7 +126,7 @@ def radiometry(img, rng):
     return out
 
 
-def run_module(module, group, points, flags, env):
+def run_module(module, group, points, flags, options, env):
     cmd = [
         module,
         f"group={group}",
@@ -138,6 +138,7 @@ def run_module(module, group, points, flags, env):
     ]
     if flags:
         cmd.append(f"-{flags}")
+    cmd += options.split()
     t0 = time.monotonic()
     p = subprocess.run(
         cmd, env=env, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True
@@ -161,17 +162,22 @@ def run_module(module, group, points, flags, env):
 
 def read_points(name, region):
     """Source and reference positions in window cells (centres at integers)."""
-    rows = gs.vector_db_select(
-        name, columns="src_east,src_north,ref_east,ref_north,matches"
-    )["values"]
-    a = np.array([[float(x) for x in r] for r in rows.values()]).reshape(-1, 5)
+    cols = "src_east,src_north,ref_east,ref_north,matches"
+    # Builds before the robust stage have no inlier column: all active.
+    has_inlier = "inlier" in gs.vector_columns(name)
+    if has_inlier:
+        cols += ",inlier"
+    rows = gs.vector_db_select(name, columns=cols)["values"]
+    a = np.array([[float(x) for x in r] for r in rows.values()])
+    a = a.reshape(-1, 6 if has_inlier else 5)
+    active = a[:, 5] > 0 if has_inlier else np.ones(len(a), bool)
     w, nn, ew, ns = region["w"], region["n"], region["ewres"], region["nsres"]
     xs, ys = (a[:, 0] - w) / ew - 0.5, (nn - a[:, 1]) / ns - 0.5
     xr, yr = (a[:, 2] - w) / ew - 0.5, (nn - a[:, 3]) / ns - 0.5
-    return xs, ys, xr, yr, a[:, 4]
+    return xs, ys, xr, yr, a[:, 4], active
 
 
-def score(xs, ys, xr, yr, u, v, objmask, n, merged, csv=None):
+def score(xs, ys, xr, yr, u, v, objmask, n, merged, active, csv=None):
     tu = ndimage.map_coordinates(u, [ys, xs], order=1, mode="nearest")
     tv = ndimage.map_coordinates(v, [ys, xs], order=1, mode="nearest")
     err = np.hypot(xr - (xs + tu), yr - (ys + tv))
@@ -184,12 +190,19 @@ def score(xs, ys, xr, yr, u, v, objmask, n, merged, csv=None):
     if csv:
         np.savetxt(
             csv,
-            np.column_stack([xs, ys, xr, yr, xs + tu, ys + tv, err, on_obj, merged]),
+            np.column_stack(
+                [xs, ys, xr, yr, xs + tu, ys + tv, err, on_obj, merged, active]
+            ),
             fmt="%.4f",
             delimiter=",",
-            header="xs,ys,xr,yr,x_true,y_true,err,on_object,matches",
+            header="xs,ys,xr,yr,x_true,y_true,err,on_object,matches,active",
             comments="",
         )
+    # Metrics over the active control points; the inactive ones count
+    # apart, with the correct ones among them (lost to the estimation).
+    lost_good = int((~active & ~on_obj & (err <= 1)).sum())
+    inactive = int((~active).sum())
+    xs, ys, err, on_obj = xs[active], ys[active], err[active], on_obj[active]
     ground = err[~on_obj]
     inl = ~on_obj & (err <= 1)
     blocks = {(int(y) // BLOCK, int(x) // BLOCK) for y, x in zip(ys[inl], xs[inl])}
@@ -208,6 +221,8 @@ def score(xs, ys, xr, yr, u, v, objmask, n, merged, csv=None):
         "coverage": round(len(blocks) / nblocks, 4),
         "object_points": int(on_obj.sum()),
         "object_leaks": int((on_obj & (err > 2)).sum()),
+        "inactive": inactive,
+        "lost_good": lost_good,
     }
 
 
@@ -218,6 +233,9 @@ def main():
     ap.add_argument("--module", default="i.coregistration.opencl")
     ap.add_argument("--size", type=int, default=2048)
     ap.add_argument("--flags", default="s")
+    ap.add_argument(
+        "--options", default="", help="more module options, e.g. estimator=magsac"
+    )
     ap.add_argument("--tag", default="")
     ap.add_argument("--scenarios", default=",".join(SCENARIOS))
     ap.add_argument("--seed", type=int, default=20261014)
@@ -285,10 +303,22 @@ def main():
             input=",".join(f"img_{name}.{b}" for b in (1, 2, 3)),
             quiet=True,
         )
-        info = run_module(args.module, f"img_{name}", f"gcp_{name}", args.flags, env)
-        xs, ys, xr, yr, merged = read_points(f"gcp_{name}", region)
+        info = run_module(
+            args.module, f"img_{name}", f"gcp_{name}", args.flags, args.options, env
+        )
+        xs, ys, xr, yr, merged, active = read_points(f"gcp_{name}", region)
         res = score(
-            xs, ys, xr, yr, u, v, objmask, n, merged, out / f"points_{name}.csv"
+            xs,
+            ys,
+            xr,
+            yr,
+            u,
+            v,
+            objmask,
+            n,
+            merged,
+            active,
+            out / f"points_{name}.csv",
         )
         res.update(info)
         res["params"] = params
@@ -307,13 +337,15 @@ def main():
         "inliers_2",
         "coverage",
         "object_leaks",
+        "inactive",
+        "lost_good",
         "wall_s",
         "device_s",
         "match_s",
         "tiles",
     ]
     lines = [
-        f"# Synthetic pairs ({args.tag}, {n} x {n} cells of {results['reference']}, flags -{args.flags})",
+        f"# Synthetic pairs ({args.tag}, {n} x {n} cells of {results['reference']}, flags -{args.flags} {args.options})",
         "",
         "Errors in cells against the known field; inlier ratios and errors exclude points on moved objects.",
         "",

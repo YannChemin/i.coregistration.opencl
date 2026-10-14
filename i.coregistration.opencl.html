@@ -6,8 +6,10 @@ extracted with DISK, a learnt local feature, on an OpenCL device (GPU or
 CPU), with weights read directly from the published PyTorch checkpoint;
 they are matched by nearest neighbour and the matches filtered with
 AdaLAM, which keeps those that agree with a local affine transformation
-around confident seed matches. Neither Python nor PyTorch is needed at
-run time.</p>
+around confident seed matches. A robust model fitted per tile then
+makes the remaining outliers (objects that moved between the images,
+mismatches) inactive control points. Neither Python nor PyTorch is
+needed at run time.</p>
 <p>The matching method is chosen with <b>matcher</b>. DISK with AdaLAM
 (<code>disk</code>) is the only one so far; detector-free and dense matchers will
 be added as further choices, with the same outputs.</p>
@@ -93,10 +95,69 @@ position.</p>
 <p>Matches sharing a reference cell (found in two overlapping tiles, or by
 two keypoints) are merged into one control point, at the mean of their
 positions, as the repository does.</p>
+<h3>Robust estimation</h3>
+<p>AdaLAM checks each match against its neighbourhood only. Objects that
+moved between the two images, when they are large enough (an aircraft at
+half a metre), give clusters of matches that agree with each other and
+pass. So a model is fitted to the matches of each tile
+(<b>tile_model</b>: an affinity by default, or a similarity or a
+homography), after the filters and the refinement, and the matches that
+do not fit it become inactive control points: they stay in the POINTS
+file with status 0, which <em>i.rectify</em> and <em>v.rectify</em> skip, and in the
+<b>points</b> map with <code>inlier</code> 0. Inliers and outliers are merged apart.
+<b>estimator</b> chooses the method, <code>superansac</code> by default; <code>none</code> keeps
+every match active (the behaviour of the RS_coreg_LoFTR workflow).</p>
+<ul>
+<li><code>ransac</code> draws random minimal samples (Fischler and Bolles, 1981),
+keeps the model with the most inliers and refits it to them by least
+squares.</li>
+<li><code>magsac</code> scores each model by the MAGSAC++ quality (Barath et al.,
+2020), which marginalizes the noise scale up to a maximum instead of
+counting points under a hard threshold, and refits the best model by
+least squares weighted by the MAGSAC++ weights, iterated; each point
+gets a weight between 0 and 1.</li>
+<li><code>gcransac</code> labels inliers and outliers by a minimum graph cut with a
+spatial coherence term between neighbouring matches (Graph-Cut RANSAC,
+Barath and Matas, 2018; graph construction after Kolmogorov and Zabih,
+2004, maximum flow by Dinic, 1970), so that a coherent cluster is kept
+or rejected together.</li>
+<li><code>superansac</code> combines them: samples drawn first among the best-ranked
+matches (PROSAC, Chum and Matas, 2005, by AdaLAM's confidence),
+MAGSAC++ quality, graph-cut local optimization, final weighted least
+squares.</li>
+</ul>
+<p>Every estimator rejects samples that do not determine a model and
+models that reverse the orientation or scale the image by more than a
+factor of two, and counts the matches lying within 8 cells of each other
+once (the independent inliers of Ivashechkin et al., 2021), so that a
+dense cluster cannot outvote the ground. <b>threshold</b> is the largest
+distance of an inlier to the model, in map units (3 cells by default);
+the MAGSAC++ noise scale goes up to a third of it. A tile where no model
+can be fitted has all its matches made inactive.</p>
+<p>The threshold trades the outliers left against the good points lost.
+On basemaps of half a metre, the default removed the matches of moved
+aircraft and halved the 90th percentile of the leave-one-out residuals;
+two cells removed more outliers but also points of genuine local
+distortion that one model per tile cannot follow. Between a
+hyperspectral scene of 11.3 m and basemaps averaged to its grid, the
+cross-modal matches have a heavier tail: one to one and a half cells
+brought the 90th percentile of the leave-one-out residuals from about
+two cells to about a third of a cell, where three cells left it
+unchanged.</p>
+<p>With <b>region_model</b>, a second model is fitted to the active control points
+over the whole region (a similarity, an affinity, a homography or a
+polynomial of order 2 or 3), with the same estimator, and its outliers
+become inactive too. The module then reports the root mean square of
+the inlier residuals and, for the linear models, of their leave-one-out
+residuals (each point against the least-squares model fitted without
+it). Keep it for regions whose images differ by a smooth distortion:
+over a mosaic with seams, a global polynomial rejects the points of
+whole patches that are simply off by a little.</p>
 <h3>Output</h3>
 <p>The control points are written to the group's POINTS file, source
 east/north (the cell's position in the group's current georeferencing)
-and reference east/north, all active, and the current project and mapset
+and reference east/north, active unless rejected by the robust
+estimation, and the current project and mapset
 become the group's target: <em>i.rectify</em> with <b>-t</b> (thin plate spline,
 the repository's <code>gdalwarp -tps</code>) or a polynomial <b>order</b> then warps
 the group onto the reference, and <em>v.rectify</em> moves vector maps drawn on
@@ -112,10 +173,16 @@ units;</li>
 better);</li>
 <li><code>tile</code>: tile of the match;</li>
 <li><code>refined</code>: 1 when refined to a fraction of a cell (<b>-s</b>);</li>
-<li><code>matches</code>: matches merged into the point.</li>
+<li><code>matches</code>: matches merged into the point;</li>
+<li><code>weight</code>: weight of the robust estimation, 0..1 (MAGSAC++ weight
+relative to a zero residual; 1 with <b>estimator</b>=<code>none</code>);</li>
+<li><code>residual</code>: distance to the last fitted model, in map units (NULL
+with <b>estimator</b>=<code>none</code>);</li>
+<li><code>inlier</code>: 1 for the active control points, 0 for the rejected ones.</li>
 </ul>
-<p>The module reports the number of matches, those dropped by each filter,
-and the median shift with its median absolute deviation.</p>
+<p>The module reports the number of matches, those dropped by each filter
+and by the robust estimation, and the median shift of the active
+control points with its median absolute deviation.</p>
 <h2>NOTES</h2>
 <h3>OpenCL device</h3>
 <p><b>device</b> selects the first GPU (<code>gpu</code>), the first CPU device (<code>cpu</code>),
@@ -146,7 +213,9 @@ the end (this slows the run down).</p>
 <h3>Two basemaps of different dates</h3>
 <p>Co-register a Google basemap to an ESRI one, dropping matches on
 aircraft that moved between the two dates (more than 5 m, or 2 m away
-from their tile's median), with sub-cell refinement, then warp it:</p>
+from their tile's median, then those that do not fit an affinity per
+tile), with sub-cell refinement, then warp it (the thin plate spline
+uses the active control points only):</p>
 <div class="code"><pre>i.group group=esri input=esri.1,esri.2,esri.3
 i.group group=google input=google.1,google.2,google.3
 g.region raster=esri.1 -p
@@ -155,19 +224,43 @@ i.coregistration.opencl group=google reference=esri points=gcp_google \
 i.rectify -t group=google extension=_coreg method=linear -c</pre></div>
 <h3>Hyperspectral scene to a very high resolution reference</h3>
 <p>Match a hyperspectral scene (three bands near red, green and blue)
-against a WorldView-3 pansharpened RGB image, on the reference grid, and
-look at the control points before warping:</p>
+against a WorldView-3 pansharpened RGB image, on the reference grid,
+with a robust estimation tighter than the default (cross-modal matches
+have a heavier tail: here 5 m, about one and a half cells of the 3.3 m
+scene), and look at the active control points before warping:</p>
 <div class="code"><pre>i.group group=hymap_rgb input=hymap.28,hymap.17,hymap.8
 i.group group=wv3_rgb input=wv3.5,wv3.3,wv3.2
 g.region raster=wv3.5 -p
 i.coregistration.opencl group=hymap_rgb reference=wv3_rgb \
-    points=gcp_hymap -n
-v.db.univar map=gcp_hymap column=shift</pre></div>
+    points=gcp_hymap -n threshold=5
+v.db.univar map=gcp_hymap column=shift where=&quot;inlier = 1&quot;</pre></div>
 <h2>REFERENCES</h2>
+<p>Barath, D., Matas, J., 2018. Graph-Cut RANSAC. In: Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR),
+6733-6741.</p>
+<p>Barath, D., Noskova, J., Ivashechkin, M., Matas, J., 2020. MAGSAC++, a
+fast, reliable and accurate robust estimator. In: Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR),
+1304-1312.</p>
 <p>Cavalli, L., Larsson, V., Oswald, M. R., Sattler, T., Pollefeys, M.,
 2020. Handcrafted outlier detection revisited. In: Computer Vision -
 ECCV 2020, Lecture Notes in Computer Science 12364, Springer, 770-787.
 <a href="https://doi.org/10.1007/978-3-030-58529-7_45">doi:10.1007/978-3-030-58529-7_45</a></p>
+<p>Chum, O., Matas, J., 2005. Matching with PROSAC - progressive sample
+consensus. In: Proceedings of the IEEE Computer Society Conference on
+Computer Vision and Pattern Recognition (CVPR), vol. 1, 220-226.</p>
+<p>Dinic, E. A., 1970. Algorithm for solution of a problem of maximum flow
+in networks with power estimation. Soviet Mathematics Doklady 11,
+1277-1280.</p>
+<p>Fischler, M. A., Bolles, R. C., 1981. Random sample consensus: a
+paradigm for model fitting with applications to image analysis and
+automated cartography. Communications of the ACM 24 (6), 381-395.</p>
+<p>Ivashechkin, M., Barath, D., Matas, J., 2021. VSAC: efficient and
+accurate estimator for H and F. In: Proceedings of the IEEE/CVF
+International Conference on Computer Vision (ICCV), 15243-15252.</p>
+<p>Kolmogorov, V., Zabih, R., 2004. What energy functions can be minimized
+via graph cuts? IEEE Transactions on Pattern Analysis and Machine
+Intelligence 26 (2), 147-159.</p>
 <p>Riba, E., Mishkin, D., Ponsa, D., Rublee, E., Bradski, G., 2020.
 Kornia: an open source differentiable computer vision library for
 PyTorch. In: Proceedings of the IEEE/CVF Winter Conference on

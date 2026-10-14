@@ -144,7 +144,8 @@ void gcp_merge(struct gcp_list *l)
      * cells; refined ones round to their cell. */
     k = G_malloc(l->n * sizeof(struct keyed));
     for (i = 0; i < l->n; i++) {
-        k[i].key = lround(l->v[i].yr) * 4194304L + lround(l->v[i].xr);
+        k[i].key = (lround(l->v[i].yr) * 4194304L + lround(l->v[i].xr)) * 2 +
+                   (l->v[i].inlier != 0);
         k[i].i = i;
     }
     qsort(k, l->n, sizeof(struct keyed), cmp_keyed);
@@ -166,12 +167,16 @@ void gcp_merge(struct gcp_list *l)
                 m.dist = fminf(m.dist, g->dist);
                 m.refined = m.refined && g->refined;
                 m.n += g->n;
+                m.weight += g->weight;
+                m.residual += g->residual;
                 c++;
             }
             m.xs /= c;
             m.ys /= c;
             m.xr /= c;
             m.yr /= c;
+            m.weight /= c;
+            m.residual /= c;
             v[out++] = m;
         }
         G_free(l->v);
@@ -195,22 +200,23 @@ void gcp_write_group(const struct gcp_list *l, const char *group,
                      const struct Cell_head *win)
 {
     struct Control_Points cp;
-    int i;
+    int i, active = 0;
 
     memset(&cp, 0, sizeof(cp));
     for (i = 0; i < l->n; i++) {
         const struct gcp *g = &l->v[i];
 
         I_new_control_point(&cp, east(win, g->xs), north(win, g->ys),
-                            east(win, g->xr), north(win, g->yr), 1);
+                            east(win, g->xr), north(win, g->yr), g->inlier);
+        active += g->inlier != 0;
     }
     if (I_put_control_points(group, &cp) < 0)
         G_fatal_error(_("Unable to write the control points of group <%s>"),
                       group);
     I_put_target(group, G_location(), G_mapset());
-    G_message(_("%d control points written to imagery group <%s> (target "
-                "<%s@%s>)"),
-              l->n, group, G_location(), G_mapset());
+    G_message(_("%d control points written to imagery group <%s>, %d active "
+                "(target <%s@%s>)"),
+              l->n, group, active, G_location(), G_mapset());
     if (cp.count) {
         G_free(cp.e1);
         G_free(cp.n1);
@@ -252,7 +258,8 @@ void gcp_write_vector(const struct gcp_list *l, const char *name,
              "ref_north DOUBLE PRECISION, dx DOUBLE PRECISION, "
              "dy DOUBLE PRECISION, shift DOUBLE PRECISION, "
              "dist DOUBLE PRECISION, tile INTEGER, refined INTEGER, "
-             "matches INTEGER)",
+             "matches INTEGER, weight DOUBLE PRECISION, "
+             "residual DOUBLE PRECISION, inlier INTEGER)",
              Fi->table, GV_KEY_COLUMN);
     db_set_string(&sql, buf);
     if (db_execute_immediate(driver, &sql) != DB_OK)
@@ -271,7 +278,12 @@ void gcp_write_vector(const struct gcp_list *l, const char *name,
         const struct gcp *g = &l->v[i];
         double e1 = east(win, g->xs), n1 = north(win, g->ys);
         double e2 = east(win, g->xr), n2 = north(win, g->yr);
+        char res[32];
 
+        if (isfinite(g->residual))
+            snprintf(res, sizeof(res), "%.4f", g->residual);
+        else
+            strcpy(res, "NULL");
         Vect_reset_line(Points);
         Vect_reset_cats(Cats);
         Vect_append_point(Points, e2, n2, 0.0);
@@ -279,9 +291,10 @@ void gcp_write_vector(const struct gcp_list *l, const char *name,
         Vect_write_line(&Map, GV_POINT, Points, Cats);
         snprintf(buf, sizeof(buf),
                  "INSERT INTO %s VALUES (%d, %.4f, %.4f, %.4f, %.4f, %.4f, "
-                 "%.4f, %.4f, %.6g, %d, %d, %d)",
+                 "%.4f, %.4f, %.6g, %d, %d, %d, %.4f, %s, %d)",
                  Fi->table, i + 1, e1, n1, e2, n2, e2 - e1, n2 - n1,
-                 hypot(e2 - e1, n2 - n1), g->dist, g->tile, g->refined, g->n);
+                 hypot(e2 - e1, n2 - n1), g->dist, g->tile, g->refined, g->n,
+                 g->weight, res, g->inlier);
         db_set_string(&sql, buf);
         if (db_execute_immediate(driver, &sql) != DB_OK)
             G_fatal_error(_("Unable to insert into table: %s"),

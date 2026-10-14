@@ -39,9 +39,20 @@ state, how to build, test and run, and what is still to be decided.
   of the basemaps (`gdal_translate -projwin 510500 3560500 512536
   3558464`).
 
+- Phase 1 done (2026-10-14): robust estimation (`models.c`, `robust.c`,
+  `maxflow.c`, `estimate.c`; options `estimator=` (default superansac),
+  `tile_model=`, `region_model=`, `threshold=`. Checked by
+  `tests/robust_check.c` (CPU, also run by pytest when built) and
+  `tests/robust_compare.py` (OpenCV USAC_MAGSAC); pytest 7/7 on the
+  server. Results in `tests/eval/README.md`: superansac per tile removes
+  moved-object matches (998 -> 7) and halves the basemap LOO p90;
+  cross-modal needs threshold 1-1.5 cells. The user chose superansac as
+  the default: decisions follow long-term addon use, not one report;
+  `estimator=none` reproduces v0 (and the reference comparison).
+
 ## Next step
 
-PLAN.md phase 1 (robust estimation). Ask the user about the four
+PLAN.md phase 2 (Efficient LoFTR). Ask the user about the four
 decisions at the end of PLAN.md before phases 3-4 (DINOv3 licence for
 RoMa v2; download of ELoFTR/MatchAnything weights; MatchAnything in the
 published addon or not; order). Their answers are not known yet.
@@ -57,7 +68,12 @@ published addon or not; order). Their answers are not known yet.
   to `<b>`, code blocks to `<div class="code"><pre>`, `.md` links to
   `.html`); `make` fails without the `.html`.
 - Tests: `I_COREGISTRATION_OPENCL_CHECKPOINT=~/models/disk/depth-save.pth
-  grass --tmp-project XY --exec python3 -m pytest tests`.
+  grass --tmp-project XY --exec python3 -m pytest tests`. To test a
+  build that is not installed (the server builds), also set
+  `I_COREGISTRATION_OPENCL_BINDIR=<build>/bin`: the GRASS session puts the
+  installation's bin first in PATH, so a PATH prefix is not enough (the
+  phase 0 pytest run tested the installed v0 by mistake). Build
+  `make ... robust_check` too, or its test is skipped.
 - Reference comparison: run the module with
   `I_COREGISTRATION_OPENCL_DUMP=<dir>`, then
   `~/dev/RS_coreg_LoFTR/venv_kornia/bin/python -I tests/reference_compare.py <dir> ~/models/disk/depth-save.pth`

@@ -69,11 +69,14 @@ for f in "${IMAGES[@]}"; do
 done
 rsync -a "$HERE/eval_$KIND.py" "$REMOTE:$WORK/"
 
+# Extra arguments quoted for the remote shell.
+EXTRA_Q=""
+[ ${#EXTRA[@]} -gt 0 ] && EXTRA_Q=$(printf '%q ' "${EXTRA[@]}")
 ssh_r "cat > $WORK/run.sh" <<EOS
 set -e
 cd $WORK
 grass --tmp-project ${REMOTE_IMAGES[0]} --exec python3 $WORK/eval_$KIND.py ${REMOTE_IMAGES[*]} \
-    --output $WORK/out --module \$HOME/$RBUILD/bin/i.coregistration.opencl --tag $TAG ${EXTRA[*]}
+    --output $WORK/out --module \$HOME/$RBUILD/bin/i.coregistration.opencl --tag $TAG $EXTRA_Q
 EOS
 ssh -f -n -o ConnectTimeout=10 -o BatchMode=yes "$REMOTE" \
     "cd $WORK && setsid nohup bash -c 'RUSTICL_ENABLE=$RUSTICL bash run.sh > eval.log 2>&1 && touch done || touch failed' >/dev/null 2>&1 &"

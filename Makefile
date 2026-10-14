@@ -29,3 +29,13 @@ $(OBJDIR)/ops_check: tests/ops_check.c $(OBJDIR)/ops.o $(OBJDIR)/ocl_backend.o
 		$(LDFLAGS) $(LIBES) $(EXTRA_LIBS) $(MATHLIB)
 
 .PHONY: ops_check
+
+# Developer check of the robust estimation stage (CPU only, not installed).
+robust_check: $(OBJDIR)/robust_check
+
+$(OBJDIR)/robust_check: tests/robust_check.c $(OBJDIR)/robust.o \
+		$(OBJDIR)/models.o $(OBJDIR)/maxflow.o
+	$(CC) $(ALL_CFLAGS) -I. -o $@ $< $(OBJDIR)/robust.o $(OBJDIR)/models.o \
+		$(OBJDIR)/maxflow.o $(LDFLAGS) $(LIBES) $(EXTRA_LIBS) $(MATHLIB)
+
+.PHONY: robust_check

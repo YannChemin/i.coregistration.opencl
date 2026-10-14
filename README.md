@@ -23,6 +23,11 @@ summarization), and `PLAN.md` for the order of the work.
   matchers (GEMM, convolutions, normalizations, activations, softmax,
   blockwise attention, RoPE, bilinear resizing, `grid_sample`, unfold,
   pooling, transpose).
+- `models.c`: similarity, affinity, homography, polynomials of order 2
+  and 3 (weighted least squares, leave-one-out residuals);
+  `robust.c`: RANSAC, MAGSAC++, Graph-Cut RANSAC and their combination
+  (PROSAC, independent inliers); `maxflow.c`: minimum cut (Dinic);
+  `estimate.c`: estimation over control points, per tile and region.
 - `disk.c`, `disk_kernels.cl`: the DISK network and its own kernels;
   `adalam.c`: AdaLAM; `gcp.c`: control points; `image.c`: input bands.
 - `ocl_backend.c`, `pth_loader.c`, `download.c`, `progress.c`: device,
@@ -67,6 +72,16 @@ The generic kernels are checked against PyTorch with a separate program:
 make MODULE_TOPDIR=/usr/local/grass86 OCLLIB=-lOpenCL ops_check
 OBJ.*/ops_check /tmp/ops [gpu [platform]]     # on the OpenCL machine
 python3 tests/ops_compare.py /tmp/ops          # where torch is installed
+```
+
+The robust estimation stage is checked on the CPU (synthetic models,
+outliers and moved clusters; minimum cut against brute force;
+leave-one-out against refits), and against OpenCV's USAC_MAGSAC:
+
+```sh
+make MODULE_TOPDIR=/usr/local/grass86 OCLLIB=-lOpenCL robust_check
+OBJ.*/robust_check                 # also run by pytest when built
+python3 tests/robust_compare.py    # needs OpenCV (cv2)
 ```
 
 `tests/eval/` holds the evaluation harness (synthetic warps with a known

@@ -26,6 +26,7 @@
 #include "adalam.h"
 #include "disk.h"
 #include "download.h"
+#include "estimate.h"
 #include "gcp.h"
 #include "image.h"
 #include "matcher.h"
@@ -111,7 +112,8 @@ int main(int argc, char *argv[])
             *checkpoint, *weights_dir, *model, *points, *percentile, *features,
             *tile_size, *tile_overlap, *area_ratio, *search_expansion,
             *ransac_iters, *min_inliers, *min_confidence, *max_shift,
-            *tolerance, *device, *platform;
+            *tolerance, *estimator, *tile_model, *model_opt, *threshold,
+            *device, *platform;
     } opt;
     struct {
         struct Flag *mnn, *refine, *dry, *offline;
@@ -128,8 +130,11 @@ int main(int argc, char *argv[])
     struct gcp_list gl = {0, 0, NULL};
     char *ckpt = NULL;
     int stretch = 0, tile, overlap, step, nfeat, ntx, nty, tx, ty, t = 0;
+    int nactive, i;
     int H, W, multiple, nraw = 0, nshift = 0, ntol = 0, nref = 0;
-    double lo = 0, hi = 100, max_shift = 0, tol = 0;
+    double lo = 0, hi = 100, max_shift = 0, tol = 0, threshold = 0;
+    int est_kind, tile_type, region_type, nkept = 0, nfail = 0;
+    struct robust_config tcfg, rcfg;
     float *img1, *img2;
     unsigned char *v1, *v2;
     const char *dump;
@@ -310,6 +315,51 @@ int main(int argc, char *argv[])
           "tile by more than this along either axis, in map units");
     opt.tolerance->guisection = _("Filter");
 
+    opt.estimator = G_define_option();
+    opt.estimator->key = "estimator";
+    opt.estimator->type = TYPE_STRING;
+    opt.estimator->options = "none,ransac,magsac,gcransac,superansac";
+    opt.estimator->answer = "superansac";
+    opt.estimator->description =
+        _("Robust estimation of a model per tile (and over the region with "
+          "region_model=), whose outliers are made inactive control points");
+    G_asprintf((char **)&opt.estimator->descriptions,
+               "none;%s;ransac;%s;magsac;%s;gcransac;%s;superansac;%s",
+               _("No estimation: every control point is active"),
+               _("RANSAC: inlier count, least squares on the inliers"),
+               _("MAGSAC++: noise scale marginalized, weighted least squares"),
+               _("Graph-Cut RANSAC: neighbouring points labelled together"),
+               _("PROSAC sampling, MAGSAC++ quality, graph-cut local "
+                 "optimization, weighted least squares"));
+    opt.estimator->guisection = _("Estimation");
+
+    opt.tile_model = G_define_option();
+    opt.tile_model->key = "tile_model";
+    opt.tile_model->type = TYPE_STRING;
+    opt.tile_model->options = "similarity,affine,homography";
+    opt.tile_model->answer = "affine";
+    opt.tile_model->description = _("Model fitted to the matches of each tile");
+    opt.tile_model->guisection = _("Estimation");
+
+    opt.model_opt = G_define_option();
+    opt.model_opt->key = "region_model";
+    opt.model_opt->type = TYPE_STRING;
+    opt.model_opt->options = "none,similarity,affine,homography,poly2,poly3";
+    opt.model_opt->answer = "none";
+    opt.model_opt->description =
+        _("Model fitted to the control points of the whole region after the "
+          "tiles (poly2, poly3: polynomials of order 2 and 3)");
+    opt.model_opt->guisection = _("Estimation");
+
+    opt.threshold = G_define_option();
+    opt.threshold->key = "threshold";
+    opt.threshold->type = TYPE_DOUBLE;
+    opt.threshold->required = NO;
+    opt.threshold->description =
+        _("Largest distance of an inlier to the model, in map units "
+          "(default: 3 cells)");
+    opt.threshold->guisection = _("Estimation");
+
     opt.device = G_define_option();
     opt.device->key = "device";
     opt.device->type = TYPE_STRING;
@@ -379,6 +429,15 @@ int main(int argc, char *argv[])
         G_fatal_error(_("max_shift= must be positive"));
     if (opt.tolerance->answer && (tol = atof(opt.tolerance->answer)) <= 0)
         G_fatal_error(_("tolerance= must be positive"));
+    est_kind = robust_parse(opt.estimator->answer);
+    tile_type = model_parse(opt.tile_model->answer);
+    region_type = strcmp(opt.model_opt->answer, "none") == 0
+                      ? -1
+                      : model_parse(opt.model_opt->answer);
+    if (region_type >= 0 && est_kind == ROBUST_NONE)
+        G_fatal_error(_("region_model= needs an estimator other than none"));
+    if (opt.threshold->answer && (threshold = atof(opt.threshold->answer)) <= 0)
+        G_fatal_error(_("threshold= must be positive"));
     dcfg.features = nfeat;
     dcfg.threshold = 0.0f;
     adalam_defaults(cfg);
@@ -418,6 +477,19 @@ int main(int argc, char *argv[])
     }
 
     G_get_window(&win);
+    {
+        /* Estimation settings in map units, from the cell size. */
+        double cell = sqrt(win.ew_res * win.ns_res);
+
+        if (threshold <= 0)
+            threshold = 3 * cell;
+        robust_defaults(&tcfg, est_kind, tile_type, threshold);
+        tcfg.spacing = 8 * cell;
+        tcfg.gc_radius = 20 * cell;
+        rcfg = tcfg;
+        if (region_type >= 0)
+            rcfg.model = region_type;
+    }
     ntx = win.cols <= tile ? 1 : 1 + (win.cols - tile + step - 1) / step;
     nty = win.rows <= tile ? 1 : 1 + (win.rows - tile + step - 1) / step;
     progress_plan(PG_READ, 2.0 * win.rows * win.cols / 1e6);
@@ -506,6 +578,9 @@ int main(int argc, char *argv[])
                 g.tile = t;
                 g.refined = 0;
                 g.n = 1;
+                g.inlier = 1;
+                g.weight = 1;
+                g.residual = NAN;
                 if (max_shift > 0 &&
                     hypot((g.xr - g.xs) * win.ew_res,
                           (g.yr - g.ys) * win.ns_res) > max_shift) {
@@ -545,6 +620,14 @@ int main(int argc, char *argv[])
                 for (i = first; i < gl.n; i++)
                     nref += gcp_refine(&gl.v[i], &src, &ref, REFINE_RADIUS,
                                        REFINE_SEARCH);
+            /* Robust model of the tile: its outliers become inactive. */
+            if (est_kind != ROBUST_NONE && gl.n > first) {
+                if (!estimate_points(&gl.v[first], gl.n - first, &tcfg, &win,
+                                     0, NULL))
+                    nfail++;
+                for (i = first; i < gl.n; i++)
+                    nkept += gl.v[i].inlier;
+            }
             progress_end();
         }
 
@@ -567,30 +650,65 @@ int main(int argc, char *argv[])
     {
         int before = gl.n;
 
-        gcp_merge(&gl);
         G_message(_("%d AdaLAM matches; %d dropped by max_shift=, %d by "
-                    "tolerance=; %d refined; %d control points after "
-                    "merging %d sharing a reference cell"),
-                  nraw, nshift, ntol, nref, gl.n, before - gl.n);
-    }
-    if (gl.n > 0) {
-        double *dx = G_malloc(gl.n * sizeof(double));
-        double *dy = G_malloc(gl.n * sizeof(double));
-        double mx, my, adx, ady;
-        int i;
-
-        for (i = 0; i < gl.n; i++) {
-            dx[i] = (gl.v[i].xr - gl.v[i].xs) * win.ew_res;
-            dy[i] = -(gl.v[i].yr - gl.v[i].ys) * win.ns_res;
+                    "tolerance=; %d refined"),
+                  nraw, nshift, ntol, nref);
+        if (est_kind != ROBUST_NONE) {
+            G_message(_("Per tile (%s, %s model, threshold %g): %d of %d "
+                        "matches kept"),
+                      robust_name(est_kind), model_name(tile_type), threshold,
+                      nkept, gl.n);
+            if (nfail)
+                G_warning(_("No model in %d tile(s) (too few matches or no "
+                            "plausible model): their matches are inactive"),
+                          nfail);
         }
-        mx = median(dx, gl.n);
-        my = median(dy, gl.n);
-        for (i = 0; i < gl.n; i++) {
+        gcp_merge(&gl);
+        G_message(_("%d control points after merging %d sharing a reference "
+                    "cell"),
+                  gl.n, before - gl.n);
+    }
+    if (region_type >= 0 && gl.n > 0) {
+        double rms, loo;
+        int i, before = 0, after = 0;
+
+        for (i = 0; i < gl.n; i++)
+            before += gl.v[i].inlier;
+        if (!estimate_points(gl.v, gl.n, &rcfg, &win, 1, NULL))
+            G_fatal_error(_("No %s model fits the %d control points over the "
+                            "region (try a lower order or a larger "
+                            "threshold=)"),
+                          model_name(region_type), before);
+        for (i = 0; i < gl.n; i++)
+            after += gl.v[i].inlier;
+        estimate_rms(gl.v, gl.n, region_type, &win, &rms, &loo);
+        G_message(_("Over the region (%s, %s model): %d of %d control points "
+                    "kept; residual RMS %.3f, leave-one-out RMS %.3f map "
+                    "units"),
+                  robust_name(est_kind), model_name(region_type), after,
+                  before, rms, loo);
+    }
+    for (nactive = 0, i = 0; i < gl.n; i++)
+        nactive += gl.v[i].inlier;
+    if (nactive > 0) {
+        double *dx = G_malloc(nactive * sizeof(double));
+        double *dy = G_malloc(nactive * sizeof(double));
+        double mx, my, adx, ady;
+        int k = 0;
+
+        for (i = 0; i < gl.n; i++)
+            if (gl.v[i].inlier) {
+                dx[k] = (gl.v[i].xr - gl.v[i].xs) * win.ew_res;
+                dy[k++] = -(gl.v[i].yr - gl.v[i].ys) * win.ns_res;
+            }
+        mx = median(dx, k);
+        my = median(dy, k);
+        for (i = 0; i < k; i++) {
             dx[i] = fabs(dx[i] - mx);
             dy[i] = fabs(dy[i] - my);
         }
-        adx = median(dx, gl.n);
-        ady = median(dy, gl.n);
+        adx = median(dx, k);
+        ady = median(dy, k);
         G_message(_("Shift source -> reference: median east %.3f, north "
                     "%.3f map units (median absolute deviation %.3f, %.3f)"),
                   mx, my, adx, ady);
@@ -598,7 +716,7 @@ int main(int argc, char *argv[])
         G_free(dy);
     }
     else
-        G_warning(_("No control point found"));
+        G_warning(_("No active control point found"));
 
     if (!flag.dry->answer && gl.n > 0)
         gcp_write_group(&gl, opt.group->answer, &win);

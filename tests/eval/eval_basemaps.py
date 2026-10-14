@@ -41,7 +41,7 @@ from scipy.interpolate import RegularGridInterpolator
 MIN_BLOCK = 5  # Control points a block needs.
 
 
-def run_module(module, src, ref, points, flags, env):
+def run_module(module, src, ref, points, flags, options, env):
     cmd = [
         module,
         f"group={src}",
@@ -53,6 +53,7 @@ def run_module(module, src, ref, points, flags, env):
     ]
     if flags:
         cmd.append(f"-{flags}")
+    cmd += options.split()
     t0 = time.monotonic()
     p = subprocess.run(
         cmd, env=env, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True
@@ -75,10 +76,17 @@ def run_module(module, src, ref, points, flags, env):
 
 
 def read_points(name):
-    rows = gs.vector_db_select(name, columns="src_east,src_north,ref_east,ref_north")[
-        "values"
-    ]
-    return np.array([[float(x) for x in r] for r in rows.values()]).reshape(-1, 4)
+    """Active control points (all of them before the robust stage existed),
+    and the number of inactive ones."""
+    cols = "src_east,src_north,ref_east,ref_north"
+    has_inlier = "inlier" in gs.vector_columns(name)
+    if has_inlier:
+        cols += ",inlier"
+    rows = gs.vector_db_select(name, columns=cols)["values"]
+    a = np.array([[float(x) for x in r] for r in rows.values()])
+    a = a.reshape(-1, 5 if has_inlier else 4)
+    active = a[:, 4] > 0 if has_inlier else np.ones(len(a), bool)
+    return a[active, :4], int((~active).sum())
 
 
 def poly_terms(x, y, order):
@@ -131,6 +139,9 @@ def main():
     ap.add_argument("--output", required=True)
     ap.add_argument("--module", default="i.coregistration.opencl")
     ap.add_argument("--flags", default="s")
+    ap.add_argument(
+        "--options", default="", help="more module options, e.g. estimator=magsac"
+    )
     ap.add_argument("--tag", default="")
     ap.add_argument(
         "--grid", type=int, default=256, help="cells per block of the shift fields"
@@ -178,13 +189,20 @@ def main():
         label = f"{Path(args.images[a]).stem} -> {Path(args.images[b]).stem}"
         print(f"{j}/{len(pairs)} {label}", flush=True)
         info = run_module(
-            args.module, names[a], names[b], f"gcp_{a}_{b}", args.flags, env
+            args.module,
+            names[a],
+            names[b],
+            f"gcp_{a}_{b}",
+            args.flags,
+            args.options,
+            env,
         )
-        pts = read_points(f"gcp_{a}_{b}")
+        pts, inactive = read_points(f"gcp_{a}_{b}")
         d = pts[:, 2:4] - pts[:, 0:2]
         med = np.median(d, 0) if len(d) else np.zeros(2)
         r = {
             "points": int(len(pts)),
+            "inactive": inactive,
             "shift_east": round(float(med[0]), 3),
             "shift_north": round(float(med[1]), 3),
             "mad_east": round(float(np.median(np.abs(d[:, 0] - med[0]))), 3)
@@ -230,6 +248,7 @@ def main():
     (out / "basemaps.json").write_text(json.dumps(results, indent=1) + "\n")
     cols = [
         "points",
+        "inactive",
         "shift_east",
         "shift_north",
         "mad_east",
@@ -244,7 +263,7 @@ def main():
         "tiles",
     ]
     lines = [
-        f"# Image pairs ({args.tag}, flags -{args.flags})",
+        f"# Image pairs ({args.tag}, flags -{args.flags} {args.options})",
         "",
         f"Region of {results['images'][0]}: {region['rows']} x {region['cols']} cells of "
         f"{region['nsres']:g} map units. Shifts and residuals in map units.",

@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: Unlicense
 """Tests for i.coregistration.opencl."""
 
+import math
 import statistics
 
 import grass.script as gs
 import pytest
-from conftest import SHIFT_X, SHIFT_Y
+from conftest import MOVE, SHIFT_X, SHIFT_Y
 from grass.tools import ToolError, Tools
 
 
@@ -69,7 +70,9 @@ def test_recovers_known_shift(session, checkpoint, platform):
         platform=platform,
         flags="s",
     )
-    rows = gs.vector_db_select("gcp", columns="dx,dy,refined", env=session.env)["values"]
+    rows = gs.vector_db_select("gcp", columns="dx,dy,refined", env=session.env)[
+        "values"
+    ]
     assert len(rows) >= 20
     dx = statistics.median(float(r[0]) for r in rows.values())
     dy = statistics.median(float(r[1]) for r in rows.values())
@@ -80,6 +83,51 @@ def test_recovers_known_shift(session, checkpoint, platform):
 
     # The group's control points, for i.rectify.
     found = gs.parse_command(
-        "g.findfile", element="group/img", file="POINTS", format="shell", env=session.env
+        "g.findfile",
+        element="group/img",
+        file="POINTS",
+        format="shell",
+        env=session.env,
     )
     assert found["name"].strip("'") == "POINTS"
+
+
+def test_estimator_rejects_moved_object(session, checkpoint, platform):
+    """Matches on a patch that moved MOVE cells pass AdaLAM; the robust
+    estimation per tile makes them inactive and keeps the ground."""
+    tools = Tools(session=session)
+    moved_dx = SHIFT_X - MOVE
+
+    def run(points, **extra):
+        tools.i_coregistration_opencl(
+            group="moved",
+            reference="ref",
+            checkpoint=checkpoint,
+            points=points,
+            tile_size=256,
+            platform=platform,
+            flags="sn",
+            **extra,
+        )
+        rows = gs.vector_db_select(points, columns="dx,dy,inlier", env=session.env)
+        return [(float(dx), float(dy), int(a)) for dx, dy, a in rows["values"].values()]
+
+    plain = run("gcp_plain", estimator="none")
+    assert any(abs(dx - moved_dx) < 1.5 for dx, _, _ in plain), (
+        "the moved patch gives no match: the test cannot show anything"
+    )
+    assert all(a == 1 for _, _, a in plain)
+
+    # superansac is the default.
+    robust = run("gcp_robust")
+    active = [(dx, dy) for dx, dy, a in robust if a]
+    assert len(active) >= 20
+    # Active points lie within the threshold (3 cells by default) of the
+    # true shift; the median is exact.
+    off = [(dx, dy) for dx, dy in active if math.hypot(dx - SHIFT_X, dy + SHIFT_Y) > 3]
+    assert not off, (
+        f"{len(off)} of {len(active)} active points off the shift: {off[:10]}"
+    )
+    assert statistics.median(dx for dx, _ in active) == pytest.approx(SHIFT_X, abs=0.1)
+    assert statistics.median(dy for _, dy in active) == pytest.approx(-SHIFT_Y, abs=0.1)
+    assert not any(abs(dx - moved_dx) < 1.5 for dx, _ in active)

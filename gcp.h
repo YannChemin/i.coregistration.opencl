@@ -11,12 +11,16 @@
  * the reference, in cells of the current region (column, row; cell
  * centres at integers). */
 struct gcp {
-    double xs, ys; /* Source. */
-    double xr, yr; /* Reference. */
-    float dist;    /* AdaLAM inverse confidence (lower is better). */
-    int tile;      /* Tile of the match, 1-based. */
-    int refined;   /* Reference position refined to a fraction of a cell. */
-    int n;         /* Matches merged into this point. */
+    double xs, ys;   /* Source. */
+    double xr, yr;   /* Reference. */
+    float dist;      /* AdaLAM inverse confidence (lower is better). */
+    int tile;        /* Tile of the match, 1-based. */
+    int refined;     /* Reference position refined to a fraction of a cell. */
+    int n;           /* Matches merged into this point. */
+    int inlier;      /* Kept by the robust estimation (status in POINTS). */
+    double weight;   /* Robust weight, 0..1 (1 without estimation). */
+    double residual; /* Distance to the fitted model, map units (NAN: no
+                        model). */
 };
 
 struct gcp_list {
@@ -38,19 +42,22 @@ int gcp_refine(struct gcp *g, const struct rgb_image *src,
 
 /* Merge the points that share a reference cell (the repository averages
  * the source positions of identical reference coordinates): positions
- * averaged, best inverse confidence kept. */
+ * averaged, best inverse confidence kept. Inliers and outliers of the
+ * robust estimation are merged apart; weights and residuals are
+ * averaged. */
 void gcp_merge(struct gcp_list *l);
 
 /* Write the points as the control points of imagery group (its POINTS
  * file: source east/north as image coordinates, reference east/north as
- * target coordinates, all active) and make the current project and
- * mapset its target, for i.rectify. */
+ * target coordinates, active unless rejected by the robust estimation)
+ * and make the current project and mapset its target, for i.rectify. */
 void gcp_write_group(const struct gcp_list *l, const char *group,
                      const struct Cell_head *win);
 
 /* Write the points as a vector point map at their reference positions
  * with an attribute table (source and reference coordinates, shift,
- * inverse confidence, tile, refinement, merged matches). */
+ * inverse confidence, tile, refinement, merged matches, robust weight,
+ * residual and inlier flag). */
 void gcp_write_vector(const struct gcp_list *l, const char *name,
                       const struct Cell_head *win);
 

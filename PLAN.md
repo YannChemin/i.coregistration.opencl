@@ -80,8 +80,10 @@ Status (2026-10-14): done. `ops.cl`/`ops.c` (40 cases within 3e-6 of
 PyTorch on the WX 7100, `tests/ops_check.c` + `tests/ops_compare.py`),
 `matcher.h` with `matcher_disk.c` and a `matcher=` option, `tests/eval/`
 (synthetic and real-pair scripts, `run_server.sh`). Dumps and control
-points bit-identical to v0 on 25 tiles; pytest 5/5 on the server; same
-speed (1 min 45 s for 25 tiles). Not done: a separate fast 3x3 or
+points bit-identical to v0 on 25 tiles; pytest 5/5 on the server
+(but against the installed v0 binary: the GRASS session puts the
+installation's bin first; fixed in phase 1 with
+I_COREGISTRATION_OPENCL_BINDIR); same speed (1 min 45 s for 25 tiles). Not done: a separate fast 3x3 or
 im2col path for ELoFTR's convolutions (left to phase 2, when its sizes
 are known). Cross-modal pair added afterwards (AVIRIS against the
 three basemaps on the AVIRIS grid, `tests/eval/prepare_hyperspectral.py`).
@@ -144,6 +146,31 @@ tolerance; same scores as superansac's Python bindings on fixed seeds
 
 Effort: the largest C part (estimators, samplers, scoring, max-flow);
 no device code. Done before any new network.
+
+Status (2026-10-14): done, with these differences from the plan.
+`models.c` (similarity, affinity, homography, poly2, poly3; weighted
+least squares, exact leave-one-out), `robust.c` (RANSAC, MAGSAC++ in
+closed form for 2D residuals, Graph-Cut RANSAC, superansac = PROSAC +
+MAGSAC++ + graph-cut LO + IRLS; independent inliers; degeneracy and
+plausibility checks), `maxflow.c`, `estimate.c`; options `estimator=`,
+`tile_model=`, `region_model=` (not `model=`: taken by the DISK
+weights), `threshold=` (map units; not `max_sigma=`: sigma_max is
+threshold / k as in the authors' magsac); outliers stay in POINTS with
+status 0; `weight`, `residual`, `inlier` columns. Checks:
+`tests/robust_check.c` (synthetic models and outliers, brute-force
+minimum cut, leave-one-out against refits), `tests/robust_compare.py`
+(same inliers as OpenCV's USAC_MAGSAC on six sets, models as accurate or
+better), pytest 7/7 on the server (moved-object test). Eval in
+`tests/eval/README.md`. Differences: the max-flow is Dinic's, not
+Boykov-Kolmogorov's (simpler; the graphs are small); no SPRT (the exact
+early stop on the best quality instead) and no P-NAPSAC (PROSAC and
+uniform only); no TPS model (i.rectify -t fits it on the active points);
+superansac's MAGSAC++ scoring differs from the paper's (a reparametrized
+quality), the paper's and the authors' magsac form is used; parity with
+superansac's bindings was replaced by the OpenCV comparison. Default
+`estimator=superansac` (the user's decision: the addon is built for long
+term use, not for one report); `estimator=none` gives v0's behaviour.
+Threshold default 3 cells (1-1.5 cells for cross-modal pairs).
 
 ## Phase 2. Efficient LoFTR (semi-dense)
 
@@ -292,8 +319,8 @@ Eval: same model and accuracy as with all matches, 10-100 times faster.
 | Release | Content | Check |
 |---|---|---|
 | v0 (done) | DISK + AdaLAM, tiles, filters, `-s` | kornia identical, pytest 5/5 |
-| v0.1 | Phase 0: kernel library, matcher interface, eval harness | v0 results unchanged, baseline report |
-| v0.2 | Phase 1: robust estimation stage | synthetic outlier tests, superansac parity |
+| v0.1 (done) | Phase 0: kernel library, matcher interface, eval harness | v0 results unchanged, baseline report |
+| v0.2 (done) | Phase 1: robust estimation stage | synthetic outlier tests, OpenCV USAC parity |
 | v0.3 | Phase 2: Efficient LoFTR | PyTorch parity per stage, eval vs v0 |
 | v0.4 | Phase 3: MatchAnything ELoFTR weights | cross-modal eval |
 | v0.5 | Phase 4: RoMa v2 (dense field) | PyTorch parity, dense eval |
