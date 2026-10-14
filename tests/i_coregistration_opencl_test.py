@@ -82,4 +82,4 @@ def test_recovers_known_shift(session, checkpoint, platform):
     found = gs.parse_command(
         "g.findfile", element="group/img", file="POINTS", format="shell", env=session.env
     )
-    assert found["name"] == "POINTS"
+    assert found["name"].strip("'") == "POINTS"
