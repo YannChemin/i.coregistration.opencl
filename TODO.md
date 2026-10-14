@@ -70,6 +70,34 @@ choice, weights read from the published checkpoint as for DISK.
      RoMa's matcher besides item 2 (shared backbone family, different
      refiners).
 
+## Licences of the sources to translate
+
+Cloned in `~/dev` on 2026-10-14. This addon is Unlicense: permissive
+sources can be translated, keeping their notices (and, for Apache 2.0,
+stating the changes).
+
+| Repository | Licence | Translation into this addon |
+|---|---|---|
+| RoMaV2, RoMa, superansac | MIT | yes, keep the notice |
+| magsac, graph-cut-ransac | new BSD | yes, keep the notice |
+| LoFTR, disk, kornia | Apache 2.0 | yes, keep the notice, state changes |
+| EfficientLoFTR, MatchAnything | Project Registration License v1.0 (since 2026-09-15) | see below |
+
+The Project Registration License allows research, educational and
+personal use freely, but any use in a company or organization project
+must be registered first (Google form in the licence), copies must carry
+the licence, and every recipient must register in turn: not compatible
+with an Unlicense release.
+
+- EfficientLoFTR was Apache 2.0 until commit `07e9c14` (2026-09-15):
+  translate from its parent commit, whose code stays Apache 2.0. Check
+  the licence of the pretrained weights (Google Drive and Hugging Face,
+  not in the repository) before using them.
+- MatchAnything had no code in the repository before that commit (only a
+  README and a video), so there is no earlier licence to fall back on:
+  register, or keep it out of the published addon (personal research
+  use only).
+
 ## Robust estimation (after AdaLAM)
 
 AdaLAM keeps locally affine-consistent matches but fits no model over
