@@ -4,7 +4,7 @@
 Run inside a GRASS session whose project has the images' CRS:
 
     grass --tmp-project a.tif --exec python3 eval_basemaps.py a.tif b.tif [c.tif ...] \
-        --output <dir> [--module <path>] [--flags s] [--tag v0]
+        --output <dir> [--module <path>] [--flags r] [--tag v0]
 
 The images (RGB GeoTIFFs over the same area, e.g. three basemaps or two
 dates) are linked with r.external; the region is the first image's. Each
@@ -138,7 +138,7 @@ def main():
     ap.add_argument("images", nargs="+")
     ap.add_argument("--output", required=True)
     ap.add_argument("--module", default="i.coregistration.opencl")
-    ap.add_argument("--flags", default="s")
+    ap.add_argument("--flags", default="")
     ap.add_argument(
         "--options", default="", help="more module options, e.g. estimator=magsac"
     )

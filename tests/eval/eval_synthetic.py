@@ -4,7 +4,7 @@
 Run inside a GRASS session whose project has the reference's CRS:
 
     grass --tmp-project ref.tif --exec python3 eval_synthetic.py ref.tif \
-        --output <dir> [--module <path>] [--size 2048] [--flags s] [--tag v0]
+        --output <dir> [--module <path>] [--size 2048] [--flags r] [--tag v0]
 
 The reference (an RGB GeoTIFF) is linked with r.external. In a centred
 window of size x size cells, each scenario builds an image that shows at
@@ -232,7 +232,7 @@ def main():
     ap.add_argument("--output", required=True)
     ap.add_argument("--module", default="i.coregistration.opencl")
     ap.add_argument("--size", type=int, default=2048)
-    ap.add_argument("--flags", default="s")
+    ap.add_argument("--flags", default="")
     ap.add_argument(
         "--options", default="", help="more module options, e.g. estimator=magsac"
     )

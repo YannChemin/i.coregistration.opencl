@@ -54,9 +54,11 @@ state, how to build, test and run, and what is still to be decided.
   Hugging Face safetensors weights in `~/models/eloftr` on both
   machines), im2col convolutions, `tests/reference_compare_eloftr.py`
   (run with the repository's `venv_ref`: torch 2.6 + transformers
-  4.57), eval in `tests/eval/README.md` (use `-s` with eloftr).
+  4.57), eval in `tests/eval/README.md`.
   `I_COREGISTRATION_OPENCL_ELOFTR=<model.safetensors>` enables its
-  pytest. Open question for the user: default matcher (disk or eloftr).
+  pytest. The user chose `matcher=eloftr` + refinement as the default:
+  the NCC refinement now runs unless `-r`; `-s` is a deprecated no-op
+  (warning) kept for existing scripts (the Tucson report's use it).
 
 ## Next step
 

@@ -28,8 +28,8 @@ images may be confidential).
   (https://github.com/YannChemin/MetaMonitor).
 
 ```sh
-tests/eval/run_server.sh <tag> synthetic ref.tif [--size 2048] [--flags s]
-tests/eval/run_server.sh <tag> basemaps a.tif b.tif c.tif [-- --flags s]
+tests/eval/run_server.sh <tag> synthetic ref.tif [--size 2048] [--flags r] [--options matcher=disk]
+tests/eval/run_server.sh <tag> basemaps a.tif b.tif c.tif [-- --flags r --options matcher=disk]
 python3 tests/eval/prepare_hyperspectral.py cube.zarr esri.tif google.tif bing.tif --output <dir>
 tests/eval/run_server.sh <tag> basemaps <dir>/hs_rgb.tif <dir>/*_hsgrid.tif -- --pairs star
 ```
@@ -271,3 +271,9 @@ Conclusions:
   105-129 s for DISK. The 3x3 convolutions now run as im2col + GEMM
   (16.2 s to 2.1 s per tile; bit-identical results); DISK still uses its
   conv5x5 kernel.
+
+Default since 2026-10-14: `matcher=eloftr` with the refinement, which no
+longer needs `-s` (deprecated; `-r` skips it). The rows above marked
+`-s` are what the module now does without flags; to reproduce the
+phase 0 and 1 rows, pass `--options matcher=disk` (and `--flags r` for
+those run without `-s`).

@@ -1,16 +1,18 @@
 # i.coregistration.opencl
 
 GRASS GIS addon that finds control points between an imagery group and a
-reference group with DISK local features matched and filtered by AdaLAM,
-on an OpenCL device, and writes them as the group's control points for
-*i.rectify* (thin plate spline with `-t`) or *v.rectify*. It is a C and
-OpenCL translation of
+reference group with Efficient LoFTR (default) or DISK local features
+matched and filtered by AdaLAM, on an OpenCL device, refines them to a
+fraction of a cell, and writes them as the group's control points for
+*i.rectify* (thin plate spline with `-t`) or *v.rectify*. It grew from a
+C and OpenCL translation of
 [RS_coreg_LoFTR](https://github.com/YannChemin/RS_coreg_LoFTR) (kornia
 DISK + AdaLAM, then `gdalwarp -tps`): no Python or PyTorch at run time,
-the published DISK weights are read directly (legacy PyTorch format).
+the published weights are read directly (safetensors, legacy PyTorch
+format).
 
 See `i.coregistration.opencl.md` for the manual, `TODO.md` for the
-planned matchers (Efficient LoFTR, RoMa v2, MatchAnything) and robust
+planned matchers (RoMa v2, MatchAnything) and robust
 estimators (MAGSAC++, Graph-Cut RANSAC, VSAC, SupeRANSAC, dense match
 summarization), and `PLAN.md` for the order of the work.
 
@@ -18,7 +20,8 @@ summarization), and `PLAN.md` for the order of the work.
 
 - `main.c`: options, tiles, filters, refinement, output.
 - `matcher.h`, `matcher.c`: the matcher interface (device stage, host
-  matching, dumps); `matcher_disk.c`: DISK + AdaLAM behind it.
+  matching, dumps); `matcher_disk.c`: DISK + AdaLAM behind it;
+  `matcher_eloftr.c`: Efficient LoFTR.
 - `ops.cl`, `ops.c`, `ops.h`: generic tensor kernels shared by the
   matchers (GEMM, convolutions, normalizations, activations, softmax,
   blockwise attention, RoPE, bilinear resizing, `grid_sample`, unfold,
@@ -28,6 +31,8 @@ summarization), and `PLAN.md` for the order of the work.
   `robust.c`: RANSAC, MAGSAC++, Graph-Cut RANSAC and their combination
   (PROSAC, independent inliers); `maxflow.c`: minimum cut (Dinic);
   `estimate.c`: estimation over control points, per tile and region.
+- `eloftr.c`, `eloftr_kernels.cl`: the Efficient LoFTR network and its
+  own kernels (aggregated attention, coarse and fine matching);
 - `disk.c`, `disk_kernels.cl`: the DISK network and its own kernels;
   `adalam.c`: AdaLAM; `gcp.c`: control points; `image.c`: input bands.
 - `ocl_backend.c`, `pth_loader.c`, `download.c`, `progress.c`: device,
@@ -44,16 +49,21 @@ headers and ICD loader, libcurl (download of the weights) and OpenMP.
 
 ## Weights
 
-`depth-save.pth` (default) or `epipolar-save.pth` from
-<https://github.com/cvlab-epfl/disk>, looked for in `$DISK_MODELS_DIR` or
-`~/models/disk` and downloaded there when missing (`-o` to forbid).
+- `matcher=eloftr` (default): `model.safetensors` of
+  <https://huggingface.co/zju-community/efficientloftr> (Apache 2.0),
+  looked for in `$ELOFTR_MODELS_DIR` or `~/models/eloftr`.
+- `matcher=disk`: `depth-save.pth` (default) or `epipolar-save.pth` from
+  <https://github.com/cvlab-epfl/disk>, looked for in `$DISK_MODELS_DIR`
+  or `~/models/disk`.
+
+Both are downloaded there when missing (`-o` to forbid).
 
 ## Use
 
 ```sh
 g.region raster=esri.1
 i.coregistration.opencl group=google reference=esri points=gcp_google \
-    -s max_shift=5 tolerance=2
+    max_shift=5 tolerance=2
 i.rectify -t group=google extension=_coreg method=linear -c
 ```
 
@@ -61,10 +71,11 @@ i.rectify -t group=google extension=_coreg method=linear -c
 
 ```sh
 I_COREGISTRATION_OPENCL_CHECKPOINT=~/models/disk/depth-save.pth \
+I_COREGISTRATION_OPENCL_ELOFTR=~/models/eloftr/model.safetensors \
     grass --tmp-project XY --exec python3 -m pytest tests
 ```
 
-Without the checkpoint variable, only the argument checks run.
+Without the weight variables, only the argument checks run.
 
 The generic kernels are checked against PyTorch with a separate program:
 
@@ -94,6 +105,9 @@ keypoints, scores and descriptors, AdaLAM matches) from the dump written
 with `I_COREGISTRATION_OPENCL_DUMP=<folder>`. On a 1024 x 1024 basemap
 tile, the keypoints were the same 2,048 in both images, scores within
 7e-4, descriptors within 3e-6, and AdaLAM returned the same 538 matches.
+`tests/reference_compare_eloftr.py` does the same for Efficient LoFTR
+with *transformers* (backbone, transformer, coarse matches, fine
+features and positions).
 
 ## Licence
 

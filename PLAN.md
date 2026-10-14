@@ -241,7 +241,9 @@ ELoFTR. pytest 8/8 on the server (new: ELoFTR recovers a known shift).
 Eval in `tests/eval/README.md`: 13-18 times the control points, full
 coverage, lower basemap LOO p90, faster; but ELoFTR's own sub-cell
 estimate leans to whole cells (the weights' behaviour, checked), so
-`-s` is needed for DISK-level accuracy.
+the NCC refinement is needed for DISK-level accuracy. The user then
+made `matcher=eloftr` with the refinement the default: the refinement
+runs unless `-r` is given, `-s` is kept as a deprecated no-op.
 
 ## Phase 3. MatchAnything (cross-modality, ELoFTR weights)
 

@@ -1,20 +1,25 @@
 <h2>DESCRIPTION</h2>
 <p><em>i.coregistration.opencl</em> finds control points between an imagery group
 and a reference imagery group, and writes them as the group's control
-points for <em>i.rectify</em> (or <em>v.rectify</em>). Keypoints and descriptors are
-extracted with DISK, a learnt local feature, on an OpenCL device (GPU or
-CPU), with weights read directly from the published PyTorch checkpoint;
-they are matched by nearest neighbour and the matches filtered with
-AdaLAM, which keeps those that agree with a local affine transformation
-around confident seed matches. A robust model fitted per tile then
-makes the remaining outliers (objects that moved between the images,
-mismatches) inactive control points. Neither Python nor PyTorch is
-needed at run time.</p>
-<p>The matching method is chosen with <b>matcher</b>: DISK keypoints matched
-and filtered by AdaLAM (<code>disk</code>, the default), or Efficient LoFTR
-(<code>eloftr</code>), a detector-free matcher that finds matches over the whole
-image, texture-poor areas included, to a fraction of a cell. Both give
-the same outputs and go through the same filters and robust estimation.</p>
+points for <em>i.rectify</em> (or <em>v.rectify</em>). The images are matched on an
+OpenCL device (GPU or CPU) by a learnt matcher, with weights read
+directly from their published files; the matches are refined to a
+fraction of a cell by normalized cross-correlation, and a robust model
+fitted per tile makes the remaining outliers (objects that moved
+between the images, mismatches) inactive control points. Neither
+Python nor PyTorch is needed at run time.</p>
+<p>The matching method is chosen with <b>matcher</b>: Efficient LoFTR
+(<code>eloftr</code>, the default), a detector-free matcher that finds matches over
+the whole image, texture-poor areas included, or DISK keypoints matched
+by nearest neighbour and filtered with AdaLAM (<code>disk</code>), which keeps the
+matches that agree with a local affine transformation around confident
+seed matches. Both give the same outputs and go through the same
+filters, refinement and robust estimation. On the evaluation pairs
+(aerial basemaps of 0.5 m), Efficient LoFTR with the refinement gave 13
+to 18 times as many control points as DISK, over every part of the
+images, and smaller leave-one-out residuals; DISK did better between
+images of very different radiometry and left fewer matches on moved
+objects (see <code>tests/eval/README.md</code>).</p>
 <p>The module is a translation to C and OpenCL of the RS_coreg_LoFTR
 workflow (DISK features, AdaLAM matching, control points, thin plate
 spline warp with <em>gdalwarp</em>), made for images that are already roughly
@@ -31,14 +36,14 @@ used as they are (as the repository reads its 8-bit images); others, or
 all bands with <b>percentile</b>, are stretched linearly to 0..255. Cells
 that are NULL in any band yield no keypoint.</p>
 <h3>Tiles</h3>
-<p>DISK runs on tiles of <b>tile_size</b> cells (1024 by default), with an
+<p>The matcher runs on tiles of <b>tile_size</b> cells (1024 by default), with an
 overlap of <b>tile_overlap</b> cells, taken at the same place in both
 images: since the images are already roughly aligned, each tile of the
 image is matched against the same tile of the reference only. This keeps
 the matches local, lets images of any size be processed in the memory of
-one tile, and spreads the control points over the whole region. Each
-tile yields up to <b>features</b> keypoints per image (2048, as the
-repository).</p>
+one tile, and spreads the control points over the whole region. With
+<code>disk</code>, each tile yields up to <b>features</b> keypoints per image (2048,
+as the repository).</p>
 <h3>DISK</h3>
 <p>DISK (Tyszkiewicz et al., 2020) is a U-Net of 5x5 convolutions with
 instance normalization and PReLU gates, whose output holds a 128-value
@@ -115,18 +120,19 @@ aircraft or a ship gives matches that agree with each other but not with
 the ground. <b>max_shift</b> drops matches whose shift exceeds that
 distance (in map units), and <b>tolerance</b> those whose shift differs
 from the median shift of their tile by more than that along either axis.</p>
-<p>DISK keypoints lie on cell centres, so control points are only as
-precise as one cell. Efficient LoFTR refines its matches to a fraction
-of a cell, but on aerial basemaps its estimate leans towards whole
-cells (median error 0.3-0.4 cell on synthetic sub-cell shifts, against
-0.1-0.2 cell with <b>-s</b>): use <b>-s</b> with both matchers. With <b>-s</b>,
+<p>DISK keypoints lie on cell centres, so its matches are only as precise
+as one cell. Efficient LoFTR refines its matches to a fraction of a
+cell, but on aerial basemaps its estimate leans towards whole cells
+(median error 0.3-0.4 cell on synthetic sub-cell shifts, against
+0.1-0.2 cell after the refinement below). So, unless <b>-r</b> is given,
 each match is refined in the reference
 to a fraction of a cell: the 15x15-cell grey window of the image around
 the keypoint is correlated (normalized cross-correlation) with reference
 windows shifted by up to two cells, and the peak is fitted by a parabola
 along each axis. Matches whose peak lies on the edge of the search area,
 or whose windows are flat or meet NULL cells, keep their whole-cell
-position.</p>
+position. <b>-s</b>, which asked for this refinement before it became the
+default, is deprecated.</p>
 <p>Matches sharing a reference cell (found in two overlapping tiles, or by
 two keypoints) are merged into one control point, at the mean of their
 positions, as the repository does.</p>
@@ -208,7 +214,8 @@ units;</li>
 one minus the coarse matching confidence with <code>eloftr</code> (lower is
 better);</li>
 <li><code>tile</code>: tile of the match;</li>
-<li><code>refined</code>: 1 when refined to a fraction of a cell (<b>-s</b>);</li>
+<li><code>refined</code>: 1 when refined to a fraction of a cell by the
+cross-correlation (0 with <b>-r</b>);</li>
 <li><code>matches</code>: matches merged into the point;</li>
 <li><code>weight</code>: weight of the robust estimation, 0..1 (MAGSAC++ weight
 relative to a zero residual; 1 with <b>estimator</b>=<code>none</code>);</li>
@@ -239,7 +246,7 @@ cache afterwards. With <b>--verbose</b>, the time spent on the device and
 in matching is reported at the end.</p>
 <p>Efficient LoFTR took about two seconds per 1024 x 1024 tile on the same
 GPU, and its matching on the host is almost free (25 tiles in about
-1 min 5 s, 1 min 25 s with <b>-s</b>), for 15 to 20 times as many control
+1 min 25 s with the refinement, 1 min 5 s with <b>-r</b>), for 15 to 20 times as many control
 points as DISK, spread over the whole tile. It needs about 2 GiB of
 device memory for 1024-cell tiles.</p>
 <h3>Debugging aids</h3>
@@ -258,19 +265,20 @@ the end (this slows the run down).</p>
 <p>Co-register a Google basemap to an ESRI one, dropping matches on
 aircraft that moved between the two dates (more than 5 m, or 2 m away
 from their tile's median, then those that do not fit an affinity per
-tile), with sub-cell refinement, then warp it (the thin plate spline
+tile), then warp it (the thin plate spline
 uses the active control points only):</p>
 <div class="code"><pre>i.group group=esri input=esri.1,esri.2,esri.3
 i.group group=google input=google.1,google.2,google.3
 g.region raster=esri.1 -p
 i.coregistration.opencl group=google reference=esri points=gcp_google \
-    -s max_shift=5 tolerance=2
+    max_shift=5 tolerance=2
 i.rectify -t group=google extension=_coreg method=linear -c</pre></div>
-<h3>Dense control points with Efficient LoFTR</h3>
-<p>The same pair with Efficient LoFTR, which also finds control points on
-tarmac, bare soil and other texture-poor areas, refined with <b>-s</b>:</p>
+<h3>DISK keypoints</h3>
+<p>The same pair with DISK and AdaLAM, which give fewer control points
+(none on tarmac, bare soil and other texture-poor areas) but fare better
+between images of very different radiometry:</p>
 <div class="code"><pre>i.coregistration.opencl group=google reference=esri points=gcp_google \
-    matcher=eloftr -s</pre></div>
+    matcher=disk max_shift=5 tolerance=2</pre></div>
 <h3>Hyperspectral scene to a very high resolution reference</h3>
 <p>Match a hyperspectral scene (three bands near red, green and blue)
 against a WorldView-3 pansharpened RGB image, on the reference grid,

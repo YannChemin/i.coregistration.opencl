@@ -34,6 +34,19 @@ def test_dry_run_needs_points(session, tmp_path):
         )
 
 
+def test_refinement_flags_contradict(session, tmp_path):
+    """-r (no refinement) and the deprecated -s (refinement) together are
+    rejected."""
+    tools = Tools(session=session)
+    dummy = tmp_path / "dummy.pth"
+    dummy.write_bytes(b"not used")
+
+    with pytest.raises(ToolError, match="contradict"):
+        tools.i_coregistration_opencl(
+            group="img", reference="ref", checkpoint=str(dummy), flags="rs"
+        )
+
+
 def test_missing_checkpoint_offline(session, tmp_path):
     """A missing checkpoint is not downloaded with -o."""
     tools = Tools(session=session)
@@ -58,22 +71,23 @@ def test_rejects_file_that_is_not_a_checkpoint(session, tmp_path):
 
 
 def test_recovers_known_shift(session, checkpoint, platform):
-    """On a texture shifted by (SHIFT_X, SHIFT_Y) cells, the control points
-    give that shift, to a fraction of a cell with -s."""
+    """On a texture shifted by (SHIFT_X, SHIFT_Y) cells, the DISK control
+    points give that shift, to a fraction of a cell once refined."""
     tools = Tools(session=session)
     tools.i_coregistration_opencl(
         group="img",
         reference="ref",
+        matcher="disk",
         checkpoint=checkpoint,
         points="gcp",
         tile_size=256,
         platform=platform,
-        flags="s",
     )
     rows = gs.vector_db_select("gcp", columns="dx,dy,refined", env=session.env)[
         "values"
     ]
     assert len(rows) >= 20
+    assert any(int(r[2]) for r in rows.values())
     dx = statistics.median(float(r[0]) for r in rows.values())
     dy = statistics.median(float(r[1]) for r in rows.values())
     # The image shows at (c, r) what the reference shows at (c + SHIFT_X,
@@ -92,23 +106,31 @@ def test_recovers_known_shift(session, checkpoint, platform):
     assert found["name"].strip("'") == "POINTS"
 
 
-def test_eloftr_recovers_known_shift(session, eloftr_weights, platform):
-    """Efficient LoFTR gives the known shift to a fraction of a cell
-    without -s, from its own fine matching."""
+@pytest.mark.parametrize("flags", ["", "r"])
+def test_eloftr_recovers_known_shift(session, eloftr_weights, platform, flags):
+    """Efficient LoFTR (the default matcher) gives the known shift to a
+    fraction of a cell, refined (the default) or from its own fine
+    matching alone (-r)."""
     tools = Tools(session=session)
+    points = f"gcp_eloftr_{flags or 'refined'}"
     tools.i_coregistration_opencl(
         group="img",
         reference="ref",
-        matcher="eloftr",
         checkpoint=eloftr_weights,
-        points="gcp_eloftr",
+        points=points,
         tile_size=256,
         platform=platform,
+        flags=flags,
     )
-    rows = gs.vector_db_select("gcp_eloftr", columns="dx,dy", env=session.env)[
+    rows = gs.vector_db_select(points, columns="dx,dy,refined", env=session.env)[
         "values"
     ]
     assert len(rows) >= 100
+    refined = sum(int(r[2]) for r in rows.values())
+    if flags == "r":
+        assert refined == 0
+    else:
+        assert refined >= 0.5 * len(rows)
     dx = [float(r[0]) for r in rows.values()]
     dy = [float(r[1]) for r in rows.values()]
     assert statistics.median(dx) == pytest.approx(SHIFT_X, abs=0.1)
@@ -129,11 +151,12 @@ def test_estimator_rejects_moved_object(session, checkpoint, platform):
         tools.i_coregistration_opencl(
             group="moved",
             reference="ref",
+            matcher="disk",
             checkpoint=checkpoint,
             points=points,
             tile_size=256,
             platform=platform,
-            flags="sn",
+            flags="n",
             **extra,
         )
         rows = gs.vector_db_select(points, columns="dx,dy,inlier", env=session.env)

@@ -2,21 +2,26 @@
 
 *i.coregistration.opencl* finds control points between an imagery group
 and a reference imagery group, and writes them as the group's control
-points for *i.rectify* (or *v.rectify*). Keypoints and descriptors are
-extracted with DISK, a learnt local feature, on an OpenCL device (GPU or
-CPU), with weights read directly from the published PyTorch checkpoint;
-they are matched by nearest neighbour and the matches filtered with
-AdaLAM, which keeps those that agree with a local affine transformation
-around confident seed matches. A robust model fitted per tile then
-makes the remaining outliers (objects that moved between the images,
-mismatches) inactive control points. Neither Python nor PyTorch is
-needed at run time.
+points for *i.rectify* (or *v.rectify*). The images are matched on an
+OpenCL device (GPU or CPU) by a learnt matcher, with weights read
+directly from their published files; the matches are refined to a
+fraction of a cell by normalized cross-correlation, and a robust model
+fitted per tile makes the remaining outliers (objects that moved
+between the images, mismatches) inactive control points. Neither
+Python nor PyTorch is needed at run time.
 
-The matching method is chosen with **matcher**: DISK keypoints matched
-and filtered by AdaLAM (`disk`, the default), or Efficient LoFTR
-(`eloftr`), a detector-free matcher that finds matches over the whole
-image, texture-poor areas included, to a fraction of a cell. Both give
-the same outputs and go through the same filters and robust estimation.
+The matching method is chosen with **matcher**: Efficient LoFTR
+(`eloftr`, the default), a detector-free matcher that finds matches over
+the whole image, texture-poor areas included, or DISK keypoints matched
+by nearest neighbour and filtered with AdaLAM (`disk`), which keeps the
+matches that agree with a local affine transformation around confident
+seed matches. Both give the same outputs and go through the same
+filters, refinement and robust estimation. On the evaluation pairs
+(aerial basemaps of 0.5 m), Efficient LoFTR with the refinement gave 13
+to 18 times as many control points as DISK, over every part of the
+images, and smaller leave-one-out residuals; DISK did better between
+images of very different radiometry and left fewer matches on moved
+objects (see `tests/eval/README.md`).
 
 The module is a translation to C and OpenCL of the RS_coreg_LoFTR
 workflow (DISK features, AdaLAM matching, control points, thin plate
@@ -37,14 +42,14 @@ that are NULL in any band yield no keypoint.
 
 ### Tiles
 
-DISK runs on tiles of **tile_size** cells (1024 by default), with an
+The matcher runs on tiles of **tile_size** cells (1024 by default), with an
 overlap of **tile_overlap** cells, taken at the same place in both
 images: since the images are already roughly aligned, each tile of the
 image is matched against the same tile of the reference only. This keeps
 the matches local, lets images of any size be processed in the memory of
-one tile, and spreads the control points over the whole region. Each
-tile yields up to **features** keypoints per image (2048, as the
-repository).
+one tile, and spreads the control points over the whole region. With
+`disk`, each tile yields up to **features** keypoints per image (2048,
+as the repository).
 
 ### DISK
 
@@ -132,18 +137,19 @@ the ground. **max_shift** drops matches whose shift exceeds that
 distance (in map units), and **tolerance** those whose shift differs
 from the median shift of their tile by more than that along either axis.
 
-DISK keypoints lie on cell centres, so control points are only as
-precise as one cell. Efficient LoFTR refines its matches to a fraction
-of a cell, but on aerial basemaps its estimate leans towards whole
-cells (median error 0.3-0.4 cell on synthetic sub-cell shifts, against
-0.1-0.2 cell with **-s**): use **-s** with both matchers. With **-s**,
+DISK keypoints lie on cell centres, so its matches are only as precise
+as one cell. Efficient LoFTR refines its matches to a fraction of a
+cell, but on aerial basemaps its estimate leans towards whole cells
+(median error 0.3-0.4 cell on synthetic sub-cell shifts, against
+0.1-0.2 cell after the refinement below). So, unless **-r** is given,
 each match is refined in the reference
 to a fraction of a cell: the 15x15-cell grey window of the image around
 the keypoint is correlated (normalized cross-correlation) with reference
 windows shifted by up to two cells, and the peak is fitted by a parabola
 along each axis. Matches whose peak lies on the edge of the search area,
 or whose windows are flat or meet NULL cells, keep their whole-cell
-position.
+position. **-s**, which asked for this refinement before it became the
+default, is deprecated.
 
 Matches sharing a reference cell (found in two overlapping tiles, or by
 two keypoints) are merged into one control point, at the mean of their
@@ -233,7 +239,8 @@ positions, with the attribute columns:
   one minus the coarse matching confidence with `eloftr` (lower is
   better);
 - `tile`: tile of the match;
-- `refined`: 1 when refined to a fraction of a cell (**-s**);
+- `refined`: 1 when refined to a fraction of a cell by the
+  cross-correlation (0 with **-r**);
 - `matches`: matches merged into the point;
 - `weight`: weight of the robust estimation, 0..1 (MAGSAC++ weight
   relative to a zero residual; 1 with **estimator**=`none`);
@@ -271,7 +278,7 @@ in matching is reported at the end.
 
 Efficient LoFTR took about two seconds per 1024 x 1024 tile on the same
 GPU, and its matching on the host is almost free (25 tiles in about
-1 min 5 s, 1 min 25 s with **-s**), for 15 to 20 times as many control
+1 min 25 s with the refinement, 1 min 5 s with **-r**), for 15 to 20 times as many control
 points as DISK, spread over the whole tile. It needs about 2 GiB of
 device memory for 1024-cell tiles.
 
@@ -295,7 +302,7 @@ the end (this slows the run down).
 Co-register a Google basemap to an ESRI one, dropping matches on
 aircraft that moved between the two dates (more than 5 m, or 2 m away
 from their tile's median, then those that do not fit an affinity per
-tile), with sub-cell refinement, then warp it (the thin plate spline
+tile), then warp it (the thin plate spline
 uses the active control points only):
 
 ```sh
@@ -303,18 +310,19 @@ i.group group=esri input=esri.1,esri.2,esri.3
 i.group group=google input=google.1,google.2,google.3
 g.region raster=esri.1 -p
 i.coregistration.opencl group=google reference=esri points=gcp_google \
-    -s max_shift=5 tolerance=2
+    max_shift=5 tolerance=2
 i.rectify -t group=google extension=_coreg method=linear -c
 ```
 
-### Dense control points with Efficient LoFTR
+### DISK keypoints
 
-The same pair with Efficient LoFTR, which also finds control points on
-tarmac, bare soil and other texture-poor areas, refined with **-s**:
+The same pair with DISK and AdaLAM, which give fewer control points
+(none on tarmac, bare soil and other texture-poor areas) but fare better
+between images of very different radiometry:
 
 ```sh
 i.coregistration.opencl group=google reference=esri points=gcp_google \
-    matcher=eloftr -s
+    matcher=disk max_shift=5 tolerance=2
 ```
 
 ### Hyperspectral scene to a very high resolution reference
