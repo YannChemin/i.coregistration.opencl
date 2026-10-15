@@ -634,6 +634,7 @@ void roma_alloc(struct roma_model *m, int H, int W)
     m->lowres = walloc(m, (size_t)H * W, "coarse certainty");
     m->flow = G_malloc(2 * (size_t)H * W * sizeof(float));
     m->cert = G_malloc((size_t)H * W * sizeof(float));
+    m->sd = m->v2 ? G_malloc((size_t)H * W * sizeof(float)) : NULL;
     for (k = 0; k < 2; k++) {
         m->in_c[k] =
             G_malloc(3 * (size_t)ROMA_COARSE * ROMA_COARSE * sizeof(float));
@@ -1310,7 +1311,7 @@ static void match_v2(struct roma_model *m, int cur, const float *imgA,
     size_t hw = (size_t)m->H * m->W, i;
     int h = side(ROMA_COARSE, 1), w = side(ROMA_COARSE, 1), k;
     size_t n = (size_t)h * w;
-    float *c;
+    float *c, *prec;
 
     zero(m, m->cf[cur], 0, 4 * n);
     copy(m, m->ce[cur], 0, m->cf[cur], 0, n);
@@ -1326,6 +1327,16 @@ static void match_v2(struct roma_model *m, int cur, const float *imgA,
     refiners2(m, 1, m->H, m->W, &h, &w, &cur, 1, dump, tile);
     ocl_read(m->ocl, m->fl[cur], 0, m->flow, 2 * hw * sizeof(float));
     ocl_read(m->ocl, m->cf[cur], 0, m->cert, hw * sizeof(float));
+    prec = G_malloc(3 * hw * sizeof(float));
+    ocl_read(m->ocl, m->cf[cur], hw * sizeof(float), prec,
+             3 * hw * sizeof(float));
+    for (i = 0; i < hw; i++) {
+        double det = (double)prec[i] * prec[2 * hw + i] -
+                     (double)prec[hw + i] * prec[hw + i];
+
+        m->sd[i] = det > 0 ? (float)pow(det, -0.25) : NAN;
+    }
+    G_free(prec);
     for (i = 0; i < hw; i++) {
         float *fx = m->flow + i, *fy = m->flow + hw + i;
 
@@ -1339,6 +1350,7 @@ static void match_v2(struct roma_model *m, int cur, const float *imgA,
     if (dump) {
         dump_host(dump, tile, "flow", m->flow, 2 * hw);
         dump_host(dump, tile, "cert", m->cert, hw);
+        dump_host(dump, tile, "sd", m->sd, hw);
     }
 }
 
@@ -1500,6 +1512,7 @@ void roma_free(struct roma_model *m)
     G_free(m->gp_basis);
     G_free(m->flow);
     G_free(m->cert);
+    G_free(m->sd);
     for (i = 0; i < 2; i++) {
         G_free(m->in_c[i]);
         G_free(m->in_f[i]);

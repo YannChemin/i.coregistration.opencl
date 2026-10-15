@@ -12,6 +12,8 @@ struct match {
     double x2, y2; /* Reference. */
     float cost;    /* Lower is better (AdaLAM's inverse confidence, or
                       1 - confidence for matchers that give one). */
+    float sd;      /* Predicted standard deviation of the reference
+                      position, in cells (NAN: none given). */
 };
 
 struct match_list {
@@ -58,10 +60,13 @@ struct matcher {
                  const char *dir);
     /* Dense matchers only (NULL otherwise), after run: for each of the
      * tile's h x w cells (rows of w), the shift to the reference in
-     * cells (dx along the columns, dy along the rows) and its certainty
-     * in 0..1, NAN shifts and certainty 0 where there is none. */
+     * cells (dx along the columns, dy along the rows), its certainty in
+     * 0..1 and, when has_sd, its predicted standard deviation in cells
+     * (sd may be NULL); NAN shifts and certainty 0 where there is
+     * none. */
     void (*field)(struct matcher *m, const struct matcher_tile *t, float *dx,
-                  float *dy, float *cert);
+                  float *dy, float *cert, float *sd);
+    int has_sd;
     void (*destroy)(struct matcher *m);
 };
 

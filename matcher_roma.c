@@ -12,6 +12,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <grass/gis.h>
@@ -24,6 +25,9 @@ struct roma_state {
     struct roma_model net;
     int spacing;
     float min_cert;
+    int by_sd; /* Pick the cell of smallest sd instead of highest
+                  certainty (developer aid, I_COREGISTRATION_OPENCL_ROMA_PICK
+                  = sd). */
 };
 
 static void roma_m_alloc(struct matcher *m, int H, int W)
@@ -58,7 +62,7 @@ static int roma_m_match(struct matcher *m, const struct matcher_tile *t,
                         struct match_list *out)
 {
     struct roma_state *s = m->state;
-    const float *cert = s->net.cert, *flow = s->net.flow;
+    const float *cert = s->net.cert, *flow = s->net.flow, *sd = s->net.sd;
     size_t hw = (size_t)t->H * t->W;
     int S = s->spacing, bx, by, n = 0;
 
@@ -75,7 +79,14 @@ static int roma_m_match(struct matcher *m, const struct matcher_tile *t,
 
                     if (t->valid1 && !t->valid1[(size_t)y * t->w + x])
                         continue;
-                    if (best < 0 || cert[i] > cert[best])
+                    if (s->by_sd) {
+                        /* Among the cells certain enough. */
+                        if (!(cert[i] >= s->min_cert) || !isfinite(sd[i]))
+                            continue;
+                        if (best < 0 || sd[i] < sd[best])
+                            best = (long)i;
+                    }
+                    else if (best < 0 || cert[i] > cert[best])
                         best = (long)i;
                 }
             if (best < 0 || !(cert[best] >= s->min_cert))
@@ -85,6 +96,7 @@ static int roma_m_match(struct matcher *m, const struct matcher_tile *t,
             mt.x2 = (flow[best] + 1.0) * 0.5 * t->W - 0.5;
             mt.y2 = (flow[hw + best] + 1.0) * 0.5 * t->H - 0.5;
             mt.cost = 1.0f - cert[best];
+            mt.sd = sd ? sd[best] : NAN;
             if (!valid_at(t->valid2, t->h, t->w, mt.x2, mt.y2))
                 continue;
             match_add(out, &mt);
@@ -98,7 +110,7 @@ static int roma_m_match(struct matcher *m, const struct matcher_tile *t,
  * no shift) where the image is invalid or the warp lands on an invalid
  * cell of the reference. */
 static void roma_m_field(struct matcher *m, const struct matcher_tile *t,
-                         float *dx, float *dy, float *cert)
+                         float *dx, float *dy, float *cert, float *sdo)
 {
     struct roma_state *s = m->state;
     const float *c = s->net.cert, *flow = s->net.flow;
@@ -115,11 +127,15 @@ static void roma_m_field(struct matcher *m, const struct matcher_tile *t,
                 !valid_at(t->valid2, t->h, t->w, xr, yr)) {
                 dx[o] = dy[o] = NAN;
                 cert[o] = 0.0f;
+                if (sdo)
+                    sdo[o] = NAN;
                 continue;
             }
             dx[o] = (float)(xr - x);
             dy[o] = (float)(yr - y);
             cert[o] = c[i];
+            if (sdo)
+                sdo[o] = s->net.sd ? s->net.sd[i] : NAN;
         }
 }
 
@@ -162,6 +178,11 @@ void matcher_roma_create(struct matcher *m, struct ops *ops,
     s->net.imagenet = imagenet;
     s->spacing = spacing;
     s->min_cert = min_cert;
+    {
+        const char *pick = getenv("I_COREGISTRATION_OPENCL_ROMA_PICK");
+
+        s->by_sd = v2 && pick && strcmp(pick, "sd") == 0;
+    }
     memset(m, 0, sizeof(*m));
     m->name = name;
     m->multiple = ROMA_MULTIPLE;
@@ -172,5 +193,6 @@ void matcher_roma_create(struct matcher *m, struct ops *ops,
     m->match = roma_m_match;
     m->dump = roma_m_dump;
     m->field = roma_m_field;
+    m->has_sd = v2 != NULL;
     m->destroy = roma_m_destroy;
 }

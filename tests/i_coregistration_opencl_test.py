@@ -258,6 +258,10 @@ def test_roma_recovers_known_shift(session, roma_dir, platform):
     rows = gs.vector_db_select("gcp_roma", columns="dx,dy,refined", env=session.env)[
         "values"
     ]
+    # RoMa alone predicts no standard deviation.
+    sds = gs.vector_db_select("gcp_roma", columns="sd", env=session.env)["values"]
+    assert all(r[0] == "" for r in sds.values())
+    assert not gs.find_file("roma_sd", element="cell", env=session.env)["name"]
     assert len(rows) >= 100
     assert not any(int(r[2]) for r in rows.values())
     dx = [float(r[0]) for r in rows.values()]
@@ -350,6 +354,14 @@ def test_roma_v2ref_recovers_known_shift(session, roma_dir, romav2_dir, platform
     dy = [float(r[1]) for r in rows.values()]
     assert statistics.median(dx) == pytest.approx(SHIFT_X, abs=0.1)
     assert statistics.median(dy) == pytest.approx(-SHIFT_Y, abs=0.1)
+    # Predicted standard deviations: given, positive, a fraction of a cell
+    # where certain.
+    sds = gs.vector_db_select("gcp_v2ref", columns="sd", env=session.env)["values"]
+    sds = [float(r[0]) for r in sds.values()]
+    assert all(v > 0 for v in sds)
+    assert statistics.median(sds) < 0.5
+    sdr = gs.parse_command("r.univar", map="v2ref_sd", flags="g", env=session.env)
+    assert int(sdr["n"]) > 0 and float(sdr["min"]) > 0
     tools.r_mapcalc(
         expression=f"v2ref_err = if(v2ref_certainty >= 0.5, abs(v2ref_dx - {SHIFT_X}))"
     )

@@ -198,7 +198,7 @@ int main(int argc, char *argv[])
     double lo = 0, hi = 100, max_shift = 0, tol = 0, threshold = 0;
     int est_kind, tile_type, region_type, nkept = 0, nfail = 0;
     struct robust_config tcfg, rcfg;
-    float *img1, *img2, *fdx = NULL, *fdy = NULL, *fce = NULL;
+    float *img1, *img2, *fdx = NULL, *fdy = NULL, *fce = NULL, *fsd = NULL;
     unsigned char *v1, *v2;
     const char *dump;
 
@@ -250,9 +250,11 @@ int main(int argc, char *argv[])
     opt.dense->key = "dense";
     opt.dense->required = NO;
     opt.dense->description =
-        _("Basename of the output dense shift rasters (matcher=roma): "
+        _("Basename of the output dense shift rasters (RoMa matchers): "
           "<dense>_dx east and <dense>_dy north from the image to the "
-          "reference, in map units, and <dense>_certainty, 0..1");
+          "reference, in map units, <dense>_certainty, 0..1, and with "
+          "roma_v2ref <dense>_sd, the predicted standard deviation of the "
+          "shift");
 
     opt.matcher = G_define_option();
     opt.matcher->key = "matcher";
@@ -536,7 +538,7 @@ int main(int argc, char *argv[])
         if (!is_roma)
             G_fatal_error(_("dense= needs a dense matcher (matcher=roma, "
                             "roma_v2ref or matchanything_roma)"));
-        dense_check(opt.dense->answer);
+        dense_check(opt.dense->answer, is_v2r);
     }
     multiple = is_eloftr ? ELOFTR_MULTIPLE
                : is_roma ? ROMA_MULTIPLE
@@ -727,8 +729,10 @@ int main(int argc, char *argv[])
         fdx = G_malloc((size_t)H * W * sizeof(float));
         fdy = G_malloc((size_t)H * W * sizeof(float));
         fce = G_malloc((size_t)H * W * sizeof(float));
+        if (matcher.has_sd)
+            fsd = G_malloc((size_t)H * W * sizeof(float));
         dense_open(&dense_out, opt.dense->answer, &win, tile, overlap,
-                   src.valid);
+                   src.valid, matcher.has_sd);
     }
 
     G_message(_("Matching %d tile(s) of %d x %d cells with <%s>..."), ntx * nty,
@@ -776,8 +780,8 @@ int main(int argc, char *argv[])
             if (dump)
                 matcher.dump(&matcher, &mt, dump);
             if (fdx) {
-                matcher.field(&matcher, &mt, fdx, fdy, fce);
-                dense_add(&dense_out, x0, y0, w, h, fdx, fdy, fce);
+                matcher.field(&matcher, &mt, fdx, fdy, fce, fsd);
+                dense_add(&dense_out, x0, y0, w, h, fdx, fdy, fce, fsd);
             }
 
             for (i = 0; i < ml.n; i++) {
@@ -794,6 +798,8 @@ int main(int argc, char *argv[])
                 g.inlier = 1;
                 g.weight = 1;
                 g.residual = NAN;
+                /* Cells to map units (the geometric mean cell side). */
+                g.sd = ml.v[i].sd * sqrt(win.ew_res * win.ns_res);
                 if (max_shift > 0 &&
                     hypot((g.xr - g.xs) * win.ew_res,
                           (g.yr - g.ys) * win.ns_res) > max_shift) {
@@ -863,11 +869,14 @@ int main(int argc, char *argv[])
     if (fdx) {
         dense_close(&dense_out);
         G_message(_("Dense shift written to <%s_dx>, <%s_dy>, "
-                    "<%s_certainty>"),
-                  opt.dense->answer, opt.dense->answer, opt.dense->answer);
+                    "<%s_certainty>%s%s%s"),
+                  opt.dense->answer, opt.dense->answer, opt.dense->answer,
+                  fsd ? ", <" : "", fsd ? opt.dense->answer : "",
+                  fsd ? "_sd>" : "");
         G_free(fdx);
         G_free(fdy);
         G_free(fce);
+        G_free(fsd);
     }
     {
         int before = gl.n;

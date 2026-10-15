@@ -88,6 +88,7 @@ static int eloftr_m_match(struct matcher *m, const struct matcher_tile *t,
         mt.x2 = k[2] + KP_OFFSET;
         mt.y2 = k[3] + KP_OFFSET;
         mt.cost = 1.0f - s->net.mconf[i];
+        mt.sd = NAN;
         /* Padding and NULL cells match nothing. */
         if (!valid_at(t->valid1, t->h, t->w, mt.x1, mt.y1) ||
             !valid_at(t->valid2, t->h, t->w, mt.x2, mt.y2))

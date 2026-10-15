@@ -28,7 +28,12 @@ objects that pass (error > 2 cells), wall time and the module's own
 stage timing. With --dense (matcher=roma), the dense rasters too: the
 share of cells of certainty >= 0.5 and >= 0.1, the error of their
 shifts (median, 90th percentile, moved objects apart) and the share of
-moved-object cells certain and wrong (error > 2 cells). Results go to
+moved-object cells certain and wrong (error > 2 cells). For matchers
+that predict a standard deviation (points= column sd, dense= raster
+_sd), its calibration: the share of errors within 1 and 2 predicted
+standard deviations (a calibrated isotropic Gaussian gives 39 % and
+86 %), the median error over the standard deviation (1.18) and the
+Spearman rank correlation of the two. Results go to
 <dir>/synthetic.json and synthetic.md, the
 control points with their true positions and errors (window cells) to
 <dir>/points_<scenario>.csv.
@@ -170,20 +175,46 @@ def read_points(name, region):
     """Source and reference positions in window cells (centres at integers)."""
     cols = "src_east,src_north,ref_east,ref_north,matches"
     # Builds before the robust stage have no inlier column: all active.
-    has_inlier = "inlier" in gs.vector_columns(name)
+    columns = gs.vector_columns(name)
+    has_inlier = "inlier" in columns
+    has_sd = "sd" in columns
     if has_inlier:
         cols += ",inlier"
+    if has_sd:
+        cols += ",sd"
     rows = gs.vector_db_select(name, columns=cols)["values"]
-    a = np.array([[float(x) for x in r] for r in rows.values()])
-    a = a.reshape(-1, 6 if has_inlier else 5)
+    a = np.array(
+        [[float(x) if x != "" else np.nan for x in r] for r in rows.values()]
+    )
+    a = a.reshape(-1, 5 + has_inlier + has_sd)
     active = a[:, 5] > 0 if has_inlier else np.ones(len(a), bool)
+    # Predicted standard deviation in cells (NAN: none).
+    cell = (region["ewres"] * region["nsres"]) ** 0.5
+    sd = a[:, -1] / cell if has_sd else np.full(len(a), np.nan)
     w, nn, ew, ns = region["w"], region["n"], region["ewres"], region["nsres"]
     xs, ys = (a[:, 0] - w) / ew - 0.5, (nn - a[:, 1]) / ns - 0.5
     xr, yr = (a[:, 2] - w) / ew - 0.5, (nn - a[:, 3]) / ns - 0.5
-    return xs, ys, xr, yr, a[:, 4], active
+    return xs, ys, xr, yr, a[:, 4], active, sd
 
 
-def score(xs, ys, xr, yr, u, v, objmask, n, merged, active, csv=None):
+def calibration(err, sd, prefix):
+    """Errors against predicted standard deviations (both in cells)."""
+    ok = np.isfinite(sd) & np.isfinite(err) & (sd > 0)
+    if ok.sum() < 10:
+        return {}
+    e, s = err[ok], sd[ok]
+    re = np.argsort(np.argsort(e))
+    rs = np.argsort(np.argsort(s))
+    return {
+        f"{prefix}sd_median": round(float(np.median(s)), 4),
+        f"{prefix}within_1sd": round(float(np.mean(e <= s)), 3),
+        f"{prefix}within_2sd": round(float(np.mean(e <= 2 * s)), 3),
+        f"{prefix}err_over_sd": round(float(np.median(e / s)), 3),
+        f"{prefix}spearman": round(float(np.corrcoef(re, rs)[0, 1]), 3),
+    }
+
+
+def score(xs, ys, xr, yr, u, v, objmask, n, merged, active, csv=None, sd=None):
     tu = ndimage.map_coordinates(u, [ys, xs], order=1, mode="nearest")
     tv = ndimage.map_coordinates(v, [ys, xs], order=1, mode="nearest")
     err = np.hypot(xr - (xs + tu), yr - (ys + tv))
@@ -206,6 +237,10 @@ def score(xs, ys, xr, yr, u, v, objmask, n, merged, active, csv=None):
         )
     # Metrics over the active control points; the inactive ones count
     # apart, with the correct ones among them (lost to the estimation).
+    cal = {}
+    if sd is not None:
+        keep = active & ~on_obj
+        cal = calibration(err[keep], sd[keep], "")
     lost_good = int((~active & ~on_obj & (err <= 1)).sum())
     inactive = int((~active).sum())
     xs, ys, err, on_obj = xs[active], ys[active], err[active], on_obj[active]
@@ -229,6 +264,7 @@ def score(xs, ys, xr, yr, u, v, objmask, n, merged, active, csv=None):
         "object_leaks": int((on_obj & (err > 2)).sum()),
         "inactive": inactive,
         "lost_good": lost_good,
+        **cal,
     }
 
 
@@ -242,6 +278,11 @@ def score_dense(base, region, u, v, objmask):
     if objmask is not None:
         obj = ndimage.binary_dilation(objmask, iterations=OBJECT_MARGIN)
     res = {}
+    if gs.find_file(f"{base}_sd", element="cell")["name"]:
+        sdr = np.asarray(garray.array(f"{base}_sd", dtype=np.float64))
+        sdr /= (region["ewres"] * region["nsres"]) ** 0.5
+        sure = np.isfinite(err) & (np.nan_to_num(cert) >= 0.5) & ~obj
+        res.update(calibration(err[sure], sdr[sure], "dense_"))
     for t, tag in ((0.5, "50"), (0.1, "10")):
         sure = np.isfinite(err) & (np.nan_to_num(cert) >= t)
         ground = err[sure & ~obj]
@@ -348,7 +389,7 @@ def main():
             env,
             f"dense_{name}" if args.dense else None,
         )
-        xs, ys, xr, yr, merged, active = read_points(f"gcp_{name}", region)
+        xs, ys, xr, yr, merged, active, sd = read_points(f"gcp_{name}", region)
         res = score(
             xs,
             ys,
@@ -361,6 +402,7 @@ def main():
             merged,
             active,
             out / f"points_{name}.csv",
+            sd,
         )
         res.update(info)
         if args.dense:
@@ -388,11 +430,27 @@ def main():
         "match_s",
         "tiles",
     ]
+    cols += [
+        c
+        for c in ("sd_median", "within_1sd", "within_2sd", "err_over_sd", "spearman")
+        if any(c in r for r in results["scenarios"].values())
+    ]
     if args.dense:
         cols += [
             f"dense_{m}_{t}"
             for t in ("50", "10")
             for m in ("share", "median", "p90", "object_leaks")
+        ]
+        cols += [
+            c
+            for c in (
+                "dense_sd_median",
+                "dense_within_1sd",
+                "dense_within_2sd",
+                "dense_err_over_sd",
+                "dense_spearman",
+            )
+            if any(c in r for r in results["scenarios"].values())
         ]
     lines = [
         f"# Synthetic pairs ({args.tag}, {n} x {n} cells of {results['reference']}, flags -{args.flags} {args.options})",

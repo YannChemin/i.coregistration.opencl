@@ -95,6 +95,10 @@ struct roma_model {
      * B, certainty (H, W) in 0..1, as RoMa's match() (attenuated by the
      * coarse certainty, zero where the warp leaves the image). */
     float *flow, *cert;
+    /* With RoMa v2's refiners: the predicted standard deviation of the
+     * warp per cell (H, W), in cells, det(P)^(-1/4) of RoMa v2's 2 x 2
+     * precision P (NAN where P is not positive definite). */
+    float *sd;
     float *in_c[2], *in_f[2]; /* Normalized inputs of both passes. */
 };
 

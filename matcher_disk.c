@@ -10,6 +10,7 @@
  *
  *****************************************************************************/
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -83,6 +84,7 @@ static int disk_m_match(struct matcher *m, const struct matcher_tile *t,
         mt.x2 = s->xy2[2 * b];
         mt.y2 = s->xy2[2 * b + 1];
         mt.cost = s->dist[i];
+        mt.sd = NAN;
         match_add(out, &mt);
     }
     return s->nm;

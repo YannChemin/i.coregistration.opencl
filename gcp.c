@@ -169,6 +169,7 @@ void gcp_merge(struct gcp_list *l)
                 m.n += g->n;
                 m.weight += g->weight;
                 m.residual += g->residual;
+                m.sd += g->sd;
                 c++;
             }
             m.xs /= c;
@@ -177,6 +178,7 @@ void gcp_merge(struct gcp_list *l)
             m.yr /= c;
             m.weight /= c;
             m.residual /= c;
+            m.sd /= c;
             v[out++] = m;
         }
         G_free(l->v);
@@ -259,7 +261,8 @@ void gcp_write_vector(const struct gcp_list *l, const char *name,
              "dy DOUBLE PRECISION, shift DOUBLE PRECISION, "
              "dist DOUBLE PRECISION, tile INTEGER, refined INTEGER, "
              "matches INTEGER, weight DOUBLE PRECISION, "
-             "residual DOUBLE PRECISION, inlier INTEGER)",
+             "residual DOUBLE PRECISION, inlier INTEGER, "
+             "sd DOUBLE PRECISION)",
              Fi->table, GV_KEY_COLUMN);
     db_set_string(&sql, buf);
     if (db_execute_immediate(driver, &sql) != DB_OK)
@@ -277,12 +280,16 @@ void gcp_write_vector(const struct gcp_list *l, const char *name,
         const struct gcp *g = &l->v[i];
         double e1 = east(win, g->xs), n1 = north(win, g->ys);
         double e2 = east(win, g->xr), n2 = north(win, g->yr);
-        char res[32];
+        char res[32], sd[32];
 
         if (isfinite(g->residual))
             snprintf(res, sizeof(res), "%.4f", g->residual);
         else
             strcpy(res, "NULL");
+        if (isfinite(g->sd))
+            snprintf(sd, sizeof(sd), "%.4f", g->sd);
+        else
+            strcpy(sd, "NULL");
         Vect_reset_line(Points);
         Vect_reset_cats(Cats);
         Vect_append_point(Points, e2, n2, 0.0);
@@ -290,10 +297,10 @@ void gcp_write_vector(const struct gcp_list *l, const char *name,
         Vect_write_line(&Map, GV_POINT, Points, Cats);
         snprintf(buf, sizeof(buf),
                  "INSERT INTO %s VALUES (%d, %.4f, %.4f, %.4f, %.4f, %.4f, "
-                 "%.4f, %.4f, %.6g, %d, %d, %d, %.4f, %s, %d)",
+                 "%.4f, %.4f, %.6g, %d, %d, %d, %.4f, %s, %d, %s)",
                  Fi->table, i + 1, e1, n1, e2, n2, e2 - e1, n2 - n1,
                  hypot(e2 - e1, n2 - n1), g->dist, g->tile, g->refined, g->n,
-                 g->weight, res, g->inlier);
+                 g->weight, res, g->inlier, sd);
         db_set_string(&sql, buf);
         if (db_execute_immediate(driver, &sql) != DB_OK)
             G_fatal_error(_("Unable to insert into table: %s"),
