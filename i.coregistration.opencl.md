@@ -451,21 +451,43 @@ positions, with the attribute columns:
   relative to a zero residual; 1 with **estimator**=`none`);
 - `residual`: distance to the last fitted model, in map units (NULL
   with **estimator**=`none`);
-- `inlier`: 1 for the active control points, 0 for the rejected ones.
+- `inlier`: 1 for the active control points, 0 for the rejected ones;
+- `sd`: with `roma_v2ref`, the standard deviation of the reference
+  position predicted by RoMa v2's refiners, in map units (NULL with
+  the other matchers; see below).
 
-With `matcher=roma`, **dense** writes RoMa's warp over the whole
-region as three raster maps (single precision):
+RoMa v2's refiners predict, for each cell, a 2 x 2 precision matrix P
+of its position in the reference; `sd` is det(P)^(-1/4) (the geometric
+mean of the two standard deviations, as the authors' code reports it),
+converted to map units. On the Tucson evaluation it ranked the control
+points by their accuracy, loosely: the third of the points of smallest
+`sd` had a 90th percentile of leave-one-out residuals 13 to 31 % below
+that of the third of largest `sd` between the hyperspectral scene and
+the basemaps, and 1.8 to 2.8 times below it between basemaps (rank
+correlations 0.14 to 0.35); its median was close to the median residual
+(1.4 to 2.2 m against 1.2 to 1.6 m across modalities, 0.12 to 0.15 m
+against 0.10 to 0.12 m between basemaps). On synthetic warps, where the
+errors are a few hundredths of a cell, it was larger than the errors
+(0.08 to 0.15 cell) and did not rank them. It is reported, not used by
+the module: select or weight with it downstream, for instance with
+*v.extract* on `sd`.
+
+With the RoMa matchers, **dense** writes RoMa's warp over the whole
+region as raster maps (single precision):
 
 - `<dense>_dx`, `<dense>_dy`: shift east and north from each cell of
   the image to where it lies in the reference, in map units (the same
   sign as the `dx`, `dy` columns of **points**);
-- `<dense>_certainty`: RoMa's certainty of that shift, 0..1.
+- `<dense>_certainty`: RoMa's certainty of that shift, 0..1;
+- `<dense>_sd`: with `roma_v2ref`, the predicted standard deviation of
+  the shift, in map units (as the `sd` column of **points**), blended
+  as the shifts.
 
 Neighbouring tiles are blended in their overlap (**tile_overlap**):
 each tile's weight falls linearly to its edges over the overlap width,
 and the shifts are averaged with those weights times the certainty. The
 certainty is zero, and the shifts NULL, where the warp leaves the
-reference or lands on a NULL cell of it; all three are NULL where the
+reference or lands on a NULL cell of it; all are NULL where the
 image is NULL. The rasters are the network's own estimate: none of the
 filters, the refinement or the robust estimation applies to them, so a
 vehicle that moved between the dates shows its own shift. On synthetic

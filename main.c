@@ -172,7 +172,7 @@ int main(int argc, char *argv[])
         struct Option *group, *subgroup, *reference, *ref_subgroup, *matcher,
             *checkpoint, *weights_dir, *model, *points, *percentile, *features,
             *tile_size, *tile_overlap, *area_ratio, *search_expansion,
-            *ransac_iters, *min_inliers, *min_confidence, *max_shift,
+            *ransac_iters, *min_inliers, *min_confidence, *max_shift, *max_sd,
             *tolerance, *estimator, *tile_model, *model_opt, *threshold, *dense,
             *device, *platform;
     } opt;
@@ -194,8 +194,9 @@ int main(int argc, char *argv[])
     int stretch = 0, tile, overlap, step, nfeat, ntx, nty, tx, ty, t = 0;
     int nactive, i, is_eloftr, is_ma, is_roma, is_mar, is_v2r, npe, refine;
     long long wsize;
-    int H, W, multiple, nraw = 0, nshift = 0, ntol = 0, nref = 0;
+    int H, W, multiple, nraw = 0, nshift = 0, ntol = 0, nref = 0, nsd = 0;
     double lo = 0, hi = 100, max_shift = 0, tol = 0, threshold = 0;
+    double max_sd = 0;
     int est_kind, tile_type, region_type, nkept = 0, nfail = 0;
     struct robust_config tcfg, rcfg;
     float *img1, *img2, *fdx = NULL, *fdy = NULL, *fce = NULL, *fsd = NULL;
@@ -391,6 +392,15 @@ int main(int argc, char *argv[])
         _("AdaLAM: threshold of the confidence-based RANSAC");
     opt.min_confidence->guisection = _("AdaLAM");
 
+    opt.max_sd = G_define_option();
+    opt.max_sd->key = "max_sd";
+    opt.max_sd->type = TYPE_DOUBLE;
+    opt.max_sd->required = NO;
+    opt.max_sd->description =
+        _("Drop matches whose predicted standard deviation exceeds this, in "
+          "map units (matcher=roma_v2ref)");
+    opt.max_sd->guisection = _("Filter");
+
     opt.max_shift = G_define_option();
     opt.max_shift->key = "max_shift";
     opt.max_shift->type = TYPE_DOUBLE;
@@ -555,6 +565,13 @@ int main(int argc, char *argv[])
     nfeat = atoi(opt.features->answer);
     if (opt.max_shift->answer && (max_shift = atof(opt.max_shift->answer)) <= 0)
         G_fatal_error(_("max_shift= must be positive"));
+    if (opt.max_sd->answer) {
+        if ((max_sd = atof(opt.max_sd->answer)) <= 0)
+            G_fatal_error(_("max_sd= must be positive"));
+        if (strcmp(opt.matcher->answer, "roma_v2ref") != 0)
+            G_fatal_error(_("max_sd= needs a matcher that predicts a "
+                            "standard deviation (matcher=roma_v2ref)"));
+    }
     if (opt.tolerance->answer && (tol = atof(opt.tolerance->answer)) <= 0)
         G_fatal_error(_("tolerance= must be positive"));
     est_kind = robust_parse(opt.estimator->answer);
@@ -800,6 +817,10 @@ int main(int argc, char *argv[])
                 g.residual = NAN;
                 /* Cells to map units (the geometric mean cell side). */
                 g.sd = ml.v[i].sd * sqrt(win.ew_res * win.ns_res);
+                if (max_sd > 0 && !(g.sd <= max_sd)) {
+                    nsd++;
+                    continue;
+                }
                 if (max_shift > 0 &&
                     hypot((g.xr - g.xs) * win.ew_res,
                           (g.yr - g.ys) * win.ns_res) > max_shift) {
@@ -881,9 +902,9 @@ int main(int argc, char *argv[])
     {
         int before = gl.n;
 
-        G_message(_("%d matches (%s); %d dropped by max_shift=, %d by "
-                    "tolerance=; %d refined"),
-                  nraw, opt.matcher->answer, nshift, ntol, nref);
+        G_message(_("%d matches (%s); %d dropped by max_sd=, %d by "
+                    "max_shift=, %d by tolerance=; %d refined"),
+                  nraw, opt.matcher->answer, nsd, nshift, ntol, nref);
         if (est_kind != ROBUST_NONE) {
             G_message(_("Per tile (%s, %s model, threshold %g): %d of %d "
                         "matches kept"),

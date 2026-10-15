@@ -12,7 +12,6 @@
 
 #include <math.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include <grass/gis.h>
@@ -25,9 +24,6 @@ struct roma_state {
     struct roma_model net;
     int spacing;
     float min_cert;
-    int by_sd; /* Pick the cell of smallest sd instead of highest
-                  certainty (developer aid, I_COREGISTRATION_OPENCL_ROMA_PICK
-                  = sd). */
 };
 
 static void roma_m_alloc(struct matcher *m, int H, int W)
@@ -79,14 +75,7 @@ static int roma_m_match(struct matcher *m, const struct matcher_tile *t,
 
                     if (t->valid1 && !t->valid1[(size_t)y * t->w + x])
                         continue;
-                    if (s->by_sd) {
-                        /* Among the cells certain enough. */
-                        if (!(cert[i] >= s->min_cert) || !isfinite(sd[i]))
-                            continue;
-                        if (best < 0 || sd[i] < sd[best])
-                            best = (long)i;
-                    }
-                    else if (best < 0 || cert[i] > cert[best])
+                    if (best < 0 || cert[i] > cert[best])
                         best = (long)i;
                 }
             if (best < 0 || !(cert[best] >= s->min_cert))
@@ -178,11 +167,6 @@ void matcher_roma_create(struct matcher *m, struct ops *ops,
     s->net.imagenet = imagenet;
     s->spacing = spacing;
     s->min_cert = min_cert;
-    {
-        const char *pick = getenv("I_COREGISTRATION_OPENCL_ROMA_PICK");
-
-        s->by_sd = v2 && pick && strcmp(pick, "sd") == 0;
-    }
     memset(m, 0, sizeof(*m));
     m->name = name;
     m->multiple = ROMA_MULTIPLE;

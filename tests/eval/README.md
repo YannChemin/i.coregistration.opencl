@@ -559,3 +559,33 @@ dates), more everywhere else. The cross-modal east shift is unchanged
 
 Default since 2026-10-15: `matcher=roma_v2ref` (the user's decision on
 this evaluation); `matcher=roma` gives the previous default.
+
+### RoMa v2's predicted standard deviation (2026-10-15)
+
+`roma_v2ref` now reads back RoMa v2's precision (2 x 2 per cell) and
+reports sd = det(P)^(-1/4) (tile cells, then map units): `points=`
+column `sd`, `dense=` raster `<base>_sd`. Calibration
+(`eval_synthetic.py`, `eval_basemaps.py`; tags `p4_v2r_sd`,
+`p4_hs_v2r_sd`, `p4_swir_v2r_sd`, `p4_basemaps_v2r_sd`):
+
+| test | sd median | errors within 1 sd / 2 sd | median error / sd | Spearman(sd, error) |
+|---|---|---|---|---|
+| synthetic points (cells) | 0.08-0.15 | 88-99 % / 100 % | 0.22-0.56 | 0.00-0.18 |
+| synthetic dense, certainty >= 0.5 (cells) | 0.08-0.15 | 89-99 % / 100 % | 0.22-0.54 | -0.05-0.12 |
+
+(a calibrated isotropic Gaussian: 39 % / 86 %, 1.18.)
+
+Against the leave-one-out residuals (order 2) of the real pairs:
+
+| pairs | sd median | LOO median | Spearman | LOO p90, lowest-sd third | LOO p90, highest-sd third |
+|---|---|---|---|---|---|
+| true colour (m) | 1.42-1.66 | 1.15-1.34 | 0.15-0.33 | 2.19-2.54 | 2.93-3.28 |
+| SWIR/NIR (m) | 1.74-2.22 | 1.43-1.61 | 0.14-0.21 | 2.44-2.76 | 3.41-3.56 |
+| basemaps (m) | 0.12-0.15 | 0.10-0.12 | 0.29-0.35 | 0.17-0.20 | 0.31-0.58 |
+
+On the synthetic warps (errors at their floor, a few hundredths of a
+cell) sd is too large and ranks nothing; on real pairs its scale is
+right and it ranks the points loosely but usefully. Choosing the
+block's cell by smallest sd (instead of highest certainty) gave the
+same accuracy with 15-21 % fewer points (`p4_v2r_picksd`): dropped.
+sd is reported, not used by the module.

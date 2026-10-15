@@ -95,7 +95,11 @@ state, how to build, test and run, and what is still to be decided.
   `$ROMAV2_MODELS_DIR` or `~/models/romav2`). Parity
   `tests/reference_compare_roma2.py` (venv_kornia, not `-I`): 1.4e-3
   cell. Best or equal on every Tucson test, 20 % faster than roma; the
-  default since 2026-10-15 (user's decision).
+  default since 2026-10-15 (user's decision). Its predicted standard
+  deviation (det(P)^(-1/4) of RoMa v2's precision) is reported as
+  `points=` column `sd` and `dense=` raster `_sd`; calibration in
+  tests/eval/README.md (ranks real residuals loosely, too large on
+  synthetic warps); not used by the module.
   `I_COREGISTRATION_OPENCL_ROMAV2=<folder>` enables its pytest.
 
 ## Next step
