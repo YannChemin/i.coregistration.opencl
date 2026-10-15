@@ -173,8 +173,8 @@ int main(int argc, char *argv[])
             *checkpoint, *weights_dir, *model, *points, *percentile, *features,
             *tile_size, *tile_overlap, *area_ratio, *search_expansion,
             *ransac_iters, *min_inliers, *min_confidence, *max_shift, *max_sd,
-            *tolerance, *estimator, *tile_model, *model_opt, *threshold, *dense,
-            *device, *platform;
+            *max_cycle, *tolerance, *estimator, *tile_model, *model_opt,
+            *threshold, *dense, *device, *platform;
     } opt;
     struct {
         struct Flag *mnn, *raw, *refine, *dry, *offline;
@@ -195,8 +195,9 @@ int main(int argc, char *argv[])
     int nactive, i, is_eloftr, is_ma, is_roma, is_mar, is_v2r, npe, refine;
     long long wsize;
     int H, W, multiple, nraw = 0, nshift = 0, ntol = 0, nref = 0, nsd = 0;
+    int ncyc = 0;
     double lo = 0, hi = 100, max_shift = 0, tol = 0, threshold = 0;
-    double max_sd = 0;
+    double max_sd = 0, max_cycle = 0;
     int est_kind, tile_type, region_type, nkept = 0, nfail = 0;
     struct robust_config tcfg, rcfg;
     float *img1, *img2, *fdx = NULL, *fdy = NULL, *fce = NULL, *fsd = NULL;
@@ -401,6 +402,16 @@ int main(int argc, char *argv[])
           "map units (matcher=roma_v2ref)");
     opt.max_sd->guisection = _("Filter");
 
+    opt.max_cycle = G_define_option();
+    opt.max_cycle->key = "max_cycle";
+    opt.max_cycle->type = TYPE_DOUBLE;
+    opt.max_cycle->required = NO;
+    opt.max_cycle->description =
+        _("Also warp the reference onto the image and drop matches that it "
+          "does not bring back within this distance, in map units (RoMa "
+          "matchers; about twice the matching time)");
+    opt.max_cycle->guisection = _("Filter");
+
     opt.max_shift = G_define_option();
     opt.max_shift->key = "max_shift";
     opt.max_shift->type = TYPE_DOUBLE;
@@ -572,6 +583,13 @@ int main(int argc, char *argv[])
             G_fatal_error(_("max_sd= needs a matcher that predicts a "
                             "standard deviation (matcher=roma_v2ref)"));
     }
+    if (opt.max_cycle->answer) {
+        if ((max_cycle = atof(opt.max_cycle->answer)) <= 0)
+            G_fatal_error(_("max_cycle= must be positive"));
+        if (!is_roma)
+            G_fatal_error(_("max_cycle= needs a dense matcher (matcher=roma, "
+                            "roma_v2ref or matchanything_roma)"));
+    }
     if (opt.tolerance->answer && (tol = atof(opt.tolerance->answer)) <= 0)
         G_fatal_error(_("tolerance= must be positive"));
     est_kind = robust_parse(opt.estimator->answer);
@@ -735,6 +753,7 @@ int main(int argc, char *argv[])
                         : tile;
     W = win.cols < tile ? (win.cols + multiple - 1) / multiple * multiple
                         : tile;
+    matcher.cycle = max_cycle > 0;
     matcher.alloc(&matcher, H, W);
     img1 = G_malloc(3 * (size_t)H * W * sizeof(float));
     img2 = G_malloc(3 * (size_t)H * W * sizeof(float));
@@ -817,8 +836,13 @@ int main(int argc, char *argv[])
                 g.residual = NAN;
                 /* Cells to map units (the geometric mean cell side). */
                 g.sd = ml.v[i].sd * sqrt(win.ew_res * win.ns_res);
+                g.cycle = ml.v[i].cycle * sqrt(win.ew_res * win.ns_res);
                 if (max_sd > 0 && !(g.sd <= max_sd)) {
                     nsd++;
+                    continue;
+                }
+                if (max_cycle > 0 && !(g.cycle <= max_cycle)) {
+                    ncyc++;
                     continue;
                 }
                 if (max_shift > 0 &&
@@ -903,8 +927,9 @@ int main(int argc, char *argv[])
         int before = gl.n;
 
         G_message(_("%d matches (%s); %d dropped by max_sd=, %d by "
-                    "max_shift=, %d by tolerance=; %d refined"),
-                  nraw, opt.matcher->answer, nsd, nshift, ntol, nref);
+                    "max_cycle=, %d by max_shift=, %d by tolerance=; %d "
+                    "refined"),
+                  nraw, opt.matcher->answer, nsd, ncyc, nshift, ntol, nref);
         if (est_kind != ROBUST_NONE) {
             G_message(_("Per tile (%s, %s model, threshold %g): %d of %d "
                         "matches kept"),

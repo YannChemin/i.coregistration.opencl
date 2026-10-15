@@ -85,6 +85,7 @@ static int disk_m_match(struct matcher *m, const struct matcher_tile *t,
         mt.y2 = s->xy2[2 * b + 1];
         mt.cost = s->dist[i];
         mt.sd = NAN;
+        mt.cycle = NAN;
         match_add(out, &mt);
     }
     return s->nm;

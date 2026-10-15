@@ -14,6 +14,9 @@ struct match {
                       1 - confidence for matchers that give one). */
     float sd;      /* Predicted standard deviation of the reference
                       position, in cells (NAN: none given). */
+    float cycle;   /* Distance from the image position to where the
+                      reverse warp brings the reference position back,
+                      in cells (NAN: not computed). */
 };
 
 struct match_list {
@@ -67,6 +70,9 @@ struct matcher {
     void (*field)(struct matcher *m, const struct matcher_tile *t, float *dx,
                   float *dy, float *cert, float *sd);
     int has_sd;
+    /* Dense matchers only: when set before alloc, run also matches the
+     * reference onto the image, and match fills cycle. */
+    int cycle;
     void (*destroy)(struct matcher *m);
 };
 

@@ -23,6 +23,8 @@ struct gcp {
                         model). */
     double sd;       /* Predicted standard deviation of the reference
                         position, map units (NAN: none given). */
+    double cycle;    /* Forward-backward cycle error, map units (NAN: not
+                        computed). */
 };
 
 struct gcp_list {
@@ -45,8 +47,8 @@ int gcp_refine(struct gcp *g, const struct rgb_image *src,
 /* Merge the points that share a reference cell (the repository averages
  * the source positions of identical reference coordinates): positions
  * averaged, best inverse confidence kept. Inliers and outliers of the
- * robust estimation are merged apart; weights, residuals and predicted
- * standard deviations are averaged. */
+ * robust estimation are merged apart; weights, residuals, predicted
+ * standard deviations and cycle errors are averaged. */
 void gcp_merge(struct gcp_list *l);
 
 /* Write the points as the control points of imagery group (its POINTS
@@ -59,7 +61,8 @@ void gcp_write_group(const struct gcp_list *l, const char *group,
 /* Write the points as a vector point map at their reference positions
  * with an attribute table (source and reference coordinates, shift,
  * inverse confidence, tile, refinement, merged matches, robust weight,
- * residual, inlier flag and predicted standard deviation). */
+ * residual, inlier flag, predicted standard deviation and cycle
+ * error). */
 void gcp_write_vector(const struct gcp_list *l, const char *name,
                       const struct Cell_head *win);
 

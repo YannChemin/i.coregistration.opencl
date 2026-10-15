@@ -24,6 +24,9 @@ struct roma_state {
     struct roma_model net;
     int spacing;
     float min_cert;
+    /* With m->cycle: the warp of the reference onto the image (2, H, W),
+     * normalized as net.flow. */
+    float *bflow;
 };
 
 static void roma_m_alloc(struct matcher *m, int H, int W)
@@ -31,6 +34,8 @@ static void roma_m_alloc(struct matcher *m, int H, int W)
     struct roma_state *s = m->state;
 
     roma_alloc(&s->net, H, W);
+    if (m->cycle)
+        s->bflow = G_realloc(s->bflow, 2 * (size_t)H * W * sizeof(float));
 }
 
 static void roma_m_run(struct matcher *m, const struct matcher_tile *t)
@@ -40,7 +45,48 @@ static void roma_m_run(struct matcher *m, const struct matcher_tile *t)
     if (t->H != s->net.H || t->W != s->net.W)
         G_fatal_error(_("RoMa tile %d x %d differs from its buffers"), t->H,
                       t->W);
+    /* The reverse warp first, so that the forward one stays in net (and
+     * in the dumps). */
+    if (m->cycle) {
+        roma_match(&s->net, t->img2, t->img1, NULL, t->index);
+        memcpy(s->bflow, s->net.flow, 2 * (size_t)t->H * t->W * sizeof(float));
+    }
     roma_match(&s->net, t->img1, t->img2, m->dump_dir, t->index);
+}
+
+/* The forward-backward cycle error at image cell (x, y) whose warp lands
+ * at (xr, yr) in the reference: the distance, in cells, from (x, y) to
+ * the reverse warp at (xr, yr), interpolated bilinearly between the
+ * tile's cells. */
+static float cycle_error(const struct roma_state *s,
+                         const struct matcher_tile *t, int x, int y, double xr,
+                         double yr)
+{
+    size_t hw = (size_t)t->H * t->W;
+    double fx, fy, bx = 0, by = 0;
+    int x0, y0, i, j;
+
+    xr = xr < 0 ? 0 : xr > t->w - 1 ? t->w - 1 : xr;
+    yr = yr < 0 ? 0 : yr > t->h - 1 ? t->h - 1 : yr;
+    x0 = (int)xr < t->w - 1 ? (int)xr : t->w - 1;
+    y0 = (int)yr < t->h - 1 ? (int)yr : t->h - 1;
+    if (t->w == 1 || t->h == 1)
+        return NAN;
+    if (x0 == t->w - 1)
+        x0--;
+    if (y0 == t->h - 1)
+        y0--;
+    fx = xr - x0;
+    fy = yr - y0;
+    for (j = 0; j < 2; j++)
+        for (i = 0; i < 2; i++) {
+            size_t k = (size_t)(y0 + j) * t->W + x0 + i;
+            double wgt = (i ? fx : 1 - fx) * (j ? fy : 1 - fy);
+
+            bx += wgt * ((s->bflow[k] + 1.0) * 0.5 * t->W - 0.5);
+            by += wgt * ((s->bflow[hw + k] + 1.0) * 0.5 * t->H - 0.5);
+        }
+    return (float)hypot(bx - x, by - y);
 }
 
 static int valid_at(const unsigned char *v, int h, int w, double x, double y)
@@ -88,6 +134,9 @@ static int roma_m_match(struct matcher *m, const struct matcher_tile *t,
             mt.sd = sd ? sd[best] : NAN;
             if (!valid_at(t->valid2, t->h, t->w, mt.x2, mt.y2))
                 continue;
+            mt.cycle = m->cycle ? cycle_error(s, t, (int)mt.x1, (int)mt.y1,
+                                              mt.x2, mt.y2)
+                                : NAN;
             match_add(out, &mt);
             n++;
         }
@@ -150,6 +199,7 @@ static void roma_m_destroy(struct matcher *m)
     struct roma_state *s = m->state;
 
     roma_free(&s->net);
+    G_free(s->bflow);
     G_free(s);
     m->state = NULL;
 }
