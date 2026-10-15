@@ -103,6 +103,17 @@ def test_max_sd_needs_roma_v2ref(session):
         )
 
 
+def test_max_cycle_needs_dense_matcher(session):
+    """max_cycle= needs a matcher whose dense warp can be reversed."""
+    tools = Tools(session=session)
+
+    with pytest.raises(ToolError, match="max_cycle="):
+        tools.i_coregistration_opencl(
+            group="img", reference="ref", matcher="eloftr", max_cycle=1, points="p",
+            flags="n",
+        )
+
+
 def test_rejects_file_that_is_not_a_checkpoint(session, tmp_path):
     """A file that is neither a zip nor a legacy PyTorch checkpoint fails
     before any matching."""
@@ -391,9 +402,40 @@ def test_roma_v2ref_recovers_known_shift(session, roma_dir, romav2_dir, platform
     ]
     assert 0 < len(kept) < len(sds)
     assert all(float(r[0]) <= cut + 1e-4 for r in kept.values())
+    # Without max_cycle= no cycle error is computed.
+    cyc = gs.vector_db_select("gcp_v2ref", columns="cycle", env=session.env)["values"]
+    assert all(r[0] == "" for r in cyc.values())
     tools.r_mapcalc(
         expression=f"v2ref_err = if(v2ref_certainty >= 0.5, abs(v2ref_dx - {SHIFT_X}))"
     )
     err = gs.parse_command("r.univar", map="v2ref_err", flags="ge", env=session.env)
     assert int(err["n"]) >= 0.3 * gs.region(env=session.env)["cells"]
     assert float(err["median"]) < 0.1
+
+    # max_cycle= also warps the reference onto the image: on a pure shift
+    # the round trip comes back within a fraction of a cell, and the
+    # matches above the threshold are dropped.
+    def cycle_run(points, limit):
+        tools.i_coregistration_opencl(
+            group="img",
+            reference="ref",
+            matcher="roma_v2ref",
+            points=points,
+            max_cycle=limit,
+            tile_size=160,
+            platform=platform,
+            flags="n",
+        )
+        rows = gs.vector_db_select(points, columns="dx,cycle", env=session.env)
+        return [(float(a), float(c)) for a, c in rows["values"].values()]
+
+    every = cycle_run("gcp_v2ref_cyc", 1e9)
+    assert len(every) >= 100
+    cycles = [c for _, c in every]
+    assert all(c >= 0 for c in cycles)
+    assert statistics.median(cycles) < 0.25
+    assert statistics.median(dx for dx, _ in every) == pytest.approx(SHIFT_X, abs=0.1)
+    cut = statistics.median(cycles)
+    kept = cycle_run("gcp_v2ref_cyc_cut", cut)
+    assert 0 < len(kept) < len(every)
+    assert all(c <= cut + 1e-4 for _, c in kept)

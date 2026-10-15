@@ -178,23 +178,47 @@ def read_points(name, region):
     columns = gs.vector_columns(name)
     has_inlier = "inlier" in columns
     has_sd = "sd" in columns
+    has_cycle = "cycle" in columns
     if has_inlier:
         cols += ",inlier"
     if has_sd:
         cols += ",sd"
+    if has_cycle:
+        cols += ",cycle"
     rows = gs.vector_db_select(name, columns=cols)["values"]
     a = np.array(
         [[float(x) if x != "" else np.nan for x in r] for r in rows.values()]
     )
-    a = a.reshape(-1, 5 + has_inlier + has_sd)
+    a = a.reshape(-1, 5 + has_inlier + has_sd + has_cycle)
     active = a[:, 5] > 0 if has_inlier else np.ones(len(a), bool)
-    # Predicted standard deviation in cells (NAN: none).
+    # Predicted standard deviation and cycle error in cells (NAN: none).
     cell = (region["ewres"] * region["nsres"]) ** 0.5
-    sd = a[:, -1] / cell if has_sd else np.full(len(a), np.nan)
+    k = 5 + has_inlier
+    sd = a[:, k] / cell if has_sd else np.full(len(a), np.nan)
+    cycle = a[:, k + has_sd] / cell if has_cycle else np.full(len(a), np.nan)
     w, nn, ew, ns = region["w"], region["n"], region["ewres"], region["nsres"]
     xs, ys = (a[:, 0] - w) / ew - 0.5, (nn - a[:, 1]) / ns - 0.5
     xr, yr = (a[:, 2] - w) / ew - 0.5, (nn - a[:, 3]) / ns - 0.5
-    return xs, ys, xr, yr, a[:, 4], active, sd
+    return xs, ys, xr, yr, a[:, 4], active, sd, cycle
+
+
+def cycle_stats(err, cycle, on_obj):
+    """Cycle errors against the true errors (cells): their median on the
+    ground and on moved objects, and their Spearman correlation with the
+    errors on the ground."""
+    ok = np.isfinite(cycle) & np.isfinite(err)
+    g, o = ok & ~on_obj, ok & on_obj
+    if g.sum() < 10:
+        return {}
+    re = np.argsort(np.argsort(err[g]))
+    rc = np.argsort(np.argsort(cycle[g]))
+    res = {
+        "cycle_median": round(float(np.median(cycle[g])), 4),
+        "cycle_spearman": round(float(np.corrcoef(re, rc)[0, 1]), 3),
+    }
+    if o.sum():
+        res["cycle_obj_median"] = round(float(np.median(cycle[o])), 3)
+    return res
 
 
 def calibration(err, sd, prefix):
@@ -214,7 +238,9 @@ def calibration(err, sd, prefix):
     }
 
 
-def score(xs, ys, xr, yr, u, v, objmask, n, merged, active, csv=None, sd=None):
+def score(
+    xs, ys, xr, yr, u, v, objmask, n, merged, active, csv=None, sd=None, cycle=None
+):
     tu = ndimage.map_coordinates(u, [ys, xs], order=1, mode="nearest")
     tv = ndimage.map_coordinates(v, [ys, xs], order=1, mode="nearest")
     err = np.hypot(xr - (xs + tu), yr - (ys + tv))
@@ -241,6 +267,8 @@ def score(xs, ys, xr, yr, u, v, objmask, n, merged, active, csv=None, sd=None):
     if sd is not None:
         keep = active & ~on_obj
         cal = calibration(err[keep], sd[keep], "")
+    if cycle is not None:
+        cal.update(cycle_stats(err[active], cycle[active], on_obj[active]))
     lost_good = int((~active & ~on_obj & (err <= 1)).sum())
     inactive = int((~active).sum())
     xs, ys, err, on_obj = xs[active], ys[active], err[active], on_obj[active]
@@ -389,7 +417,9 @@ def main():
             env,
             f"dense_{name}" if args.dense else None,
         )
-        xs, ys, xr, yr, merged, active, sd = read_points(f"gcp_{name}", region)
+        xs, ys, xr, yr, merged, active, sd, cycle = read_points(
+            f"gcp_{name}", region
+        )
         res = score(
             xs,
             ys,
@@ -403,6 +433,7 @@ def main():
             active,
             out / f"points_{name}.csv",
             sd,
+            cycle,
         )
         res.update(info)
         if args.dense:
@@ -432,7 +463,16 @@ def main():
     ]
     cols += [
         c
-        for c in ("sd_median", "within_1sd", "within_2sd", "err_over_sd", "spearman")
+        for c in (
+            "sd_median",
+            "within_1sd",
+            "within_2sd",
+            "err_over_sd",
+            "spearman",
+            "cycle_median",
+            "cycle_spearman",
+            "cycle_obj_median",
+        )
         if any(c in r for r in results["scenarios"].values())
     ]
     if args.dense:

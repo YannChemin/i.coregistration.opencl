@@ -75,26 +75,32 @@ def run_module(module, src, ref, points, flags, options, env):
     return info
 
 
+EXTRA_COLUMNS = ("sd", "cycle")
+
+
 def read_points(name):
     """Active control points (all of them before the robust stage existed),
     the number of inactive ones, and the active points' predicted standard
-    deviations (map units; NAN when the matcher gives none)."""
-    cols = "src_east,src_north,ref_east,ref_north"
+    deviations and cycle errors (map units, by name; NAN when the module
+    gives none)."""
+    cols = ["src_east", "src_north", "ref_east", "ref_north"]
     columns = gs.vector_columns(name)
     has_inlier = "inlier" in columns
-    has_sd = "sd" in columns
     if has_inlier:
-        cols += ",inlier"
-    if has_sd:
-        cols += ",sd"
-    rows = gs.vector_db_select(name, columns=cols)["values"]
+        cols.append("inlier")
+    extra = [c for c in EXTRA_COLUMNS if c in columns]
+    cols += extra
+    rows = gs.vector_db_select(name, columns=",".join(cols))["values"]
     a = np.array(
         [[float(x) if x != "" else np.nan for x in r] for r in rows.values()]
     )
-    a = a.reshape(-1, 4 + has_inlier + has_sd)
+    a = a.reshape(-1, len(cols))
     active = a[:, 4] > 0 if has_inlier else np.ones(len(a), bool)
-    sd = a[active, -1] if has_sd else np.full(int(active.sum()), np.nan)
-    return a[active, :4], int((~active).sum()), sd
+    more = {
+        c: a[active, cols.index(c)] if c in extra else np.full(int(active.sum()), np.nan)
+        for c in EXTRA_COLUMNS
+    }
+    return a[active, :4], int((~active).sum()), more
 
 
 def coverage(pts, region, block):
@@ -107,21 +113,23 @@ def coverage(pts, region, block):
     return round(len(set(zip(ix[ok], iy[ok]))) / (nx * ny), 4)
 
 
-def sd_vs_residual(sd, res):
-    """How well the predicted standard deviations rank the leave-one-out
-    residuals: Spearman correlation, and the residuals' 90th percentile in
-    the thirds of lowest and highest predicted standard deviation."""
-    ok = np.isfinite(sd) & np.isfinite(res)
+def ranks_residual(v, res, what):
+    """How well a per-point value (predicted standard deviation, cycle
+    error) ranks the leave-one-out residuals: its median and 90th
+    percentile, Spearman correlation, and the residuals' 90th percentile
+    in the thirds of lowest and highest value."""
+    ok = np.isfinite(v) & np.isfinite(res)
     if ok.sum() < 30:
         return {}
-    s, e = sd[ok], res[ok]
+    s, e = v[ok], res[ok]
     rs, re = np.argsort(np.argsort(s)), np.argsort(np.argsort(e))
     lo, hi = np.percentile(s, [100 / 3, 200 / 3])
     return {
-        "sd_median": round(float(np.median(s)), 3),
-        "sd_spearman": round(float(np.corrcoef(rs, re)[0, 1]), 3),
-        "loo2_p90_low_sd": round(float(np.percentile(e[s <= lo], 90)), 3),
-        "loo2_p90_high_sd": round(float(np.percentile(e[s >= hi], 90)), 3),
+        f"{what}_median": round(float(np.median(s)), 3),
+        f"{what}_p90": round(float(np.percentile(s, 90)), 3),
+        f"{what}_spearman": round(float(np.corrcoef(rs, re)[0, 1]), 3),
+        f"loo2_p90_low_{what}": round(float(np.percentile(e[s <= lo], 90)), 3),
+        f"loo2_p90_high_{what}": round(float(np.percentile(e[s >= hi], 90)), 3),
     }
 
 
@@ -184,10 +192,11 @@ def main():
     )
     ap.add_argument(
         "--pairs",
-        choices=("loop", "star"),
+        choices=("loop", "star", "back"),
         default="loop",
         help="loop: each image to the next and the last to the first; "
-        "star: the first image to each other one",
+        "star: the first image to each other one; back: each other image "
+        "to the first (star with the roles swapped)",
     )
     args = ap.parse_args()
     if len(args.images) < 2:
@@ -211,6 +220,8 @@ def main():
     m = len(names)
     if args.pairs == "star":
         pairs = [(0, k) for k in range(1, m)]
+    elif args.pairs == "back":
+        pairs = [(k, 0) for k in range(1, m)]
     else:
         pairs = [(k, (k + 1) % m) for k in range(m if m > 2 else 1)]
     results = {
@@ -233,7 +244,7 @@ def main():
             args.options,
             env,
         )
-        pts, inactive, sd = read_points(f"gcp_{a}_{b}")
+        pts, inactive, more = read_points(f"gcp_{a}_{b}")
         d = pts[:, 2:4] - pts[:, 0:2]
         med = np.median(d, 0) if len(d) else np.zeros(2)
         r = {
@@ -259,7 +270,8 @@ def main():
         r["coverage32"] = coverage(pts, region, 32)
         loo = loo_residuals(pts, 2, region)
         if loo is not None:
-            r.update(sd_vs_residual(sd, loo))
+            for c in EXTRA_COLUMNS:
+                r.update(ranks_residual(more[c], loo, c))
         r.update(info)
         results["pairs"][label] = r
         fields.append(shift_grid(pts, region, args.grid))
@@ -302,6 +314,11 @@ def main():
         "sd_spearman",
         "loo2_p90_low_sd",
         "loo2_p90_high_sd",
+        "cycle_median",
+        "cycle_p90",
+        "cycle_spearman",
+        "loo2_p90_low_cycle",
+        "loo2_p90_high_cycle",
         "wall_s",
         "device_s",
         "match_s",
