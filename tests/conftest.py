@@ -124,5 +124,14 @@ def matchanything_roma_weights():
 
 
 @pytest.fixture
+def romav2_dir():
+    """Folder of RoMa v2's refiners (romav2_refiners.pt), or skip."""
+    path = os.environ.get("I_COREGISTRATION_OPENCL_ROMAV2")
+    if not path or not (Path(path) / "romav2_refiners.pt").is_file():
+        pytest.skip("set I_COREGISTRATION_OPENCL_ROMAV2 to the folder of romav2_refiners.pt")
+    return path
+
+
+@pytest.fixture
 def platform():
     return os.environ.get("I_COREGISTRATION_OPENCL_PLATFORM")

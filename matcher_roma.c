@@ -151,12 +151,14 @@ static void roma_m_destroy(struct matcher *m)
 
 void matcher_roma_create(struct matcher *m, struct ops *ops,
                          struct pth_file *pf, struct pth_file *dino,
-                         const char *name, int imagenet, int spacing,
-                         float min_cert)
+                         struct pth_file *v2, const char *name, int imagenet,
+                         int spacing, float min_cert)
 {
     struct roma_state *s = G_calloc(1, sizeof(*s));
 
     roma_load(&s->net, ops, pf, dino);
+    if (v2)
+        roma_load_v2(&s->net, v2);
     s->net.imagenet = imagenet;
     s->spacing = spacing;
     s->min_cert = min_cert;

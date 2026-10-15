@@ -64,8 +64,8 @@ roma_cls_to_flow(__global const float *L, const int ld, const int C,
     vi[l] = arg;
     barrier(CLK_LOCAL_MEM_FENCE);
     for (k = 128; k > 0; k >>= 1) {
-        if (l < k && (vm[l + k] > vm[l] ||
-                      (vm[l + k] == vm[l] && vi[l + k] < vi[l]))) {
+        if (l < k &&
+            (vm[l + k] > vm[l] || (vm[l + k] == vm[l] && vi[l + k] < vi[l]))) {
             vm[l] = vm[l + k];
             vi[l] = vi[l + k];
         }
@@ -115,8 +115,7 @@ float bilinear0(__global const float *p, const int H, const int W,
     if (!isfinite(ix) || !isfinite(iy))
         return 0.0f;
 #define AT(yy, xx)                                                             \
-    ((xx) >= 0 && (xx) < W && (yy) >= 0 && (yy) < H ? p[(yy) * W + (xx)]       \
-                                                    : 0.0f)
+    ((xx) >= 0 && (xx) < W && (yy) >= 0 && (yy) < H ? p[(yy) * W + (xx)] : 0.0f)
     v00 = AT(y0, x0);
     v01 = AT(y0, x0 + 1);
     v10 = AT(y0 + 1, x0);
@@ -130,8 +129,8 @@ float bilinear0(__global const float *p, const int H, const int W,
  * (n = H W), into channels coff.. of out (*, n). */
 __kernel void roma_warp_sample(__global const float *in, const int C,
                                const int H, const int W,
-                               __global const float *flow,
-                               __global float *out, const int coff)
+                               __global const float *flow, __global float *out,
+                               const int coff)
 {
     const int i = get_global_id(0), c = get_global_id(1), n = H * W;
 
@@ -152,10 +151,9 @@ __kernel void roma_warp_sample(__global const float *in, const int C,
  * 512, r <= 7. */
 #define CORR_WG 64
 __kernel __attribute__((reqd_work_group_size(CORR_WG, 1, 1))) void
-roma_local_corr(__global const float *f1, __global const float *f2,
-                const int C, const int H, const int W, const int r,
-                __global const float *flow, __global float *out,
-                const int coff)
+roma_local_corr(__global const float *f1, __global const float *f2, const int C,
+                const int H, const int W, const int r,
+                __global const float *flow, __global float *out, const int coff)
 {
     __local float a1[512], S[256];
     const int i = get_group_id(0), l = get_local_id(0), n = H * W;
@@ -232,8 +230,8 @@ __kernel void roma_update(__global float *flow, __global float *cert,
 float softplus20(const float x) { return x > 20.0f ? x : log1p(exp(x)); }
 
 __kernel void roma2_update(__global float *flow, __global float *conf,
-                           __global const float *d, const int n,
-                           const float W, const float H)
+                           __global const float *d, const int n, const float W,
+                           const float H)
 {
     const int i = get_global_id(0);
     float l00, l10, l11;

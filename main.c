@@ -69,6 +69,14 @@
 #define DINOV2_SIZE 1217586395LL
 #define DINOV2_FILE "dinov2_vitl14_pretrain.pth"
 
+/* RoMa v2's refiners and their VGG19-BN, without RoMa v2's DINOv3 and
+ * coarse matcher (MIT, extracted from RoMa v2's romav2.0.1.pt). */
+#define ROMAV2R_URL                                                            \
+    "https://github.com/YannChemin/romav2-refiners/releases/download/"         \
+    "v2.0.1-refiners/romav2_refiners.pt"
+#define ROMAV2R_SIZE 20485732LL
+#define ROMAV2R_FILE "romav2_refiners.pt"
+
 /* MatchAnything's RoMa weights: never downloaded by the module (see the
  * manual for their licence), only from the authors' Google Drive. */
 #define MA_ROMA_FILE "matchanything_roma.ckpt"
@@ -175,16 +183,16 @@ int main(int argc, char *argv[])
     struct rgb_image src, ref;
     struct ocl_backend ocl;
     struct ops ops;
-    struct pth_file pf, pf_dino;
+    struct pth_file pf, pf_dino, pf_v2r;
     struct matcher matcher;
     struct disk_matcher_config dcfg;
     struct adalam_config *cfg = &dcfg.adalam;
     struct match_list ml = {0, 0, NULL};
     struct gcp_list gl = {0, 0, NULL};
     struct dense_out dense_out;
-    char *ckpt = NULL, *dino = NULL;
+    char *ckpt = NULL, *dino = NULL, *v2r = NULL;
     int stretch = 0, tile, overlap, step, nfeat, ntx, nty, tx, ty, t = 0;
-    int nactive, i, is_eloftr, is_ma, is_roma, is_mar, npe, refine;
+    int nactive, i, is_eloftr, is_ma, is_roma, is_mar, is_v2r, npe, refine;
     long long wsize;
     int H, W, multiple, nraw = 0, nshift = 0, ntol = 0, nref = 0;
     double lo = 0, hi = 100, max_shift = 0, tol = 0, threshold = 0;
@@ -249,11 +257,12 @@ int main(int argc, char *argv[])
     opt.matcher = G_define_option();
     opt.matcher->key = "matcher";
     opt.matcher->type = TYPE_STRING;
-    opt.matcher->options = "disk,eloftr,matchanything,roma,matchanything_roma";
+    opt.matcher->options =
+        "disk,eloftr,matchanything,roma,roma_v2ref,matchanything_roma";
     opt.matcher->answer = "roma";
     opt.matcher->description = _("Matching method");
     G_asprintf((char **)&opt.matcher->descriptions,
-               "disk;%s;eloftr;%s;matchanything;%s;roma;%s;"
+               "disk;%s;eloftr;%s;matchanything;%s;roma;%s;roma_v2ref;%s;"
                "matchanything_roma;%s",
                _("DISK keypoints matched and filtered by AdaLAM, on whole "
                  "cells"),
@@ -263,6 +272,8 @@ int main(int argc, char *argv[])
                  "weights"),
                _("RoMa: dense warp (DINOv2 and VGG features), sampled "
                  "where most certain"),
+               _("RoMa down to 1/8, then RoMa v2's refiners (without "
+                 "DINOv3)"),
                _("RoMa with MatchAnything's cross-modal weights (downloaded "
                  "by hand, see the manual)"));
     opt.matcher->guisection = _("Model");
@@ -273,7 +284,7 @@ int main(int argc, char *argv[])
     opt.checkpoint->description =
         _("Weights of the matcher (DISK: depth-save.pth or "
           "epipolar-save.pth; eloftr, matchanything: model.safetensors; "
-          "roma: roma_outdoor.pth; matchanything_roma: "
+          "roma, roma_v2ref: roma_outdoor.pth; matchanything_roma: "
           "matchanything_roma.ckpt); default: in weights_dir=, downloaded "
           "if missing (except matchanything_roma's)");
     opt.checkpoint->guisection = _("Model");
@@ -286,7 +297,8 @@ int main(int argc, char *argv[])
           "~/models/disk, $ELOFTR_MODELS_DIR or ~/models/eloftr, "
           "$MATCHANYTHING_MODELS_DIR or ~/models/matchanything, "
           "$ROMA_MODELS_DIR or ~/models/roma, which also holds DINOv2's "
-          "weights for roma and matchanything_roma)");
+          "weights for roma, roma_v2ref and matchanything_roma; RoMa v2's "
+          "refiners for roma_v2ref: $ROMAV2_MODELS_DIR or ~/models/romav2)");
     opt.weights_dir->guisection = _("Model");
 
     opt.model = G_define_option();
@@ -512,7 +524,8 @@ int main(int argc, char *argv[])
     is_ma = strcmp(opt.matcher->answer, "matchanything") == 0;
     is_eloftr = is_ma || strcmp(opt.matcher->answer, "eloftr") == 0;
     is_mar = strcmp(opt.matcher->answer, "matchanything_roma") == 0;
-    is_roma = is_mar || strcmp(opt.matcher->answer, "roma") == 0;
+    is_v2r = strcmp(opt.matcher->answer, "roma_v2ref") == 0;
+    is_roma = is_mar || is_v2r || strcmp(opt.matcher->answer, "roma") == 0;
     /* RoMa's warp is finer than the correlation refinement, which made
      * its errors 3-4 times larger (tests/eval/README.md, phase 4). */
     refine = !flag.raw->answer && !is_roma;
@@ -521,15 +534,15 @@ int main(int argc, char *argv[])
                   opt.matcher->answer);
     if (opt.dense->answer) {
         if (!is_roma)
-            G_fatal_error(_("dense= needs a dense matcher (matcher=roma or "
-                            "matchanything_roma)"));
+            G_fatal_error(_("dense= needs a dense matcher (matcher=roma, "
+                            "roma_v2ref or matchanything_roma)"));
         dense_check(opt.dense->answer);
     }
     multiple = is_eloftr ? ELOFTR_MULTIPLE
                : is_roma ? ROMA_MULTIPLE
                          : DISK_MULTIPLE;
     wsize = is_eloftr ? ELOFTR_SIZE
-            : is_roma ? ROMA_SIZE + DINOV2_SIZE
+            : is_roma ? ROMA_SIZE + DINOV2_SIZE + (is_v2r ? ROMAV2R_SIZE : 0)
                       : CHECKPOINT_SIZE;
     tile = atoi(opt.tile_size->answer);
     tile = (tile + multiple - 1) / multiple * multiple;
@@ -626,6 +639,15 @@ int main(int argc, char *argv[])
             fetch_weights(dino, DINOV2_URL, DINOV2_SIZE, "DINOv2",
                           flag.offline->answer);
         }
+        /* RoMa v2's refiners, in their own folder. */
+        if (is_v2r) {
+            char *vdir = default_weights_dir("ROMAV2_MODELS_DIR", "romav2");
+
+            G_asprintf(&v2r, "%s/%s", vdir, ROMAV2R_FILE);
+            G_free(vdir);
+            fetch_weights(v2r, ROMAV2R_URL, ROMAV2R_SIZE, "RoMa v2 refiners",
+                          flag.offline->answer);
+        }
         G_free(dir);
     }
 
@@ -673,10 +695,14 @@ int main(int argc, char *argv[])
         const char *thr = getenv("I_COREGISTRATION_OPENCL_ROMA_CERT");
 
         pth_open(&pf_dino, dino);
-        matcher_roma_create(&matcher, &ops, &pf, &pf_dino, opt.matcher->answer,
-                            !is_mar, ROMA_SPACING,
+        if (v2r)
+            pth_open(&pf_v2r, v2r);
+        matcher_roma_create(&matcher, &ops, &pf, &pf_dino, v2r ? &pf_v2r : NULL,
+                            opt.matcher->answer, !is_mar, ROMA_SPACING,
                             thr ? (float)atof(thr) : ROMA_MIN_CERT);
         pth_close(&pf_dino);
+        if (v2r)
+            pth_close(&pf_v2r);
     }
     else
         matcher_disk_create(&matcher, &ops, &pf, &dcfg);
@@ -925,5 +951,7 @@ int main(int argc, char *argv[])
     image_free(&ref);
     G_free(gl.v);
     G_free(ckpt);
+    G_free(dino);
+    G_free(v2r);
     exit(EXIT_SUCCESS);
 }

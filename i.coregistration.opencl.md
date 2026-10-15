@@ -227,6 +227,37 @@ one match on moved objects passed the robust estimation (16 for
 Efficient LoFTR). It is the default matcher; Efficient LoFTR is about
 twice as fast for a looser fit.
 
+### RoMa with RoMa v2's refiners
+
+RoMa v2, by the authors of RoMa (a preprint, not yet peer reviewed:
+<https://github.com/Parskatt/RoMaV2>), matches on features of DINOv3,
+whose licence brings terms this module does not take on (Meta's DINOv3
+License Agreement: California law, terms that Meta may change, uses
+excluded). Its refiners, however, see none of DINOv3: they refine a
+coarse warp from VGG19-BN features of their own, at 1/4, 1/2 and full
+resolution, and also give each cell a covariance of its position. With
+`matcher=roma_v2ref`, RoMa runs as above down to its refiner at 1/8 of
+the coarse pass (DINOv2's features, Gaussian process, coordinate
+decoder), then RoMa v2's refiners run from that warp at 560 x 560 cells
+and again at the tile's size, as RoMa v2 does with its own matcher; the
+certainty is RoMa v2's overlap probability, zero where the warp leaves
+the reference. On a 1024-cell tile, the warp agreed with the authors'
+code within 1.5e-3 cell (99 % within 1e-4) and the certainty within
+2e-5 (`tests/reference_compare_roma2.py`). Positions are never refined
+by correlation, and **dense** works as with `roma`.
+
+V2EVAL
+
+The refiners' weights are those of RoMa v2's release (MIT License),
+without its DINOv3 backbone and its coarse matcher: the file
+`romav2_refiners.pt` (20 MiB) holds only the `refiners` and
+`refiner_features` tensors of the authors' `romav2.0.1.pt`, extracted
+by a script published with it at
+<https://github.com/YannChemin/romav2-refiners>. It is looked for in
+`$ROMAV2_MODELS_DIR` or `~/models/romav2` and downloaded there when
+missing (unless **-o**); RoMa's and DINOv2's weights are those of
+`roma`, in RoMa's folder.
+
 ### MatchAnything's RoMa
 
 MatchAnything (see above) also trained RoMa on its cross-modal pairs.

@@ -311,3 +311,48 @@ def test_matchanything_roma_recovers_known_shift(
     # with the authors' code agreeing within 5e-4 cell.
     assert statistics.median(dx) == pytest.approx(SHIFT_X, abs=0.25)
     assert statistics.median(dy) == pytest.approx(-SHIFT_Y, abs=0.25)
+
+
+def test_roma_v2ref_offline(session, roma_dir, tmp_path):
+    """Missing RoMa v2 refiners are not downloaded with -o."""
+    tools = Tools(
+        env={**session.env, "ROMA_MODELS_DIR": roma_dir, "ROMAV2_MODELS_DIR": str(tmp_path)}
+    )
+
+    with pytest.raises(ToolError, match="not found"):
+        tools.i_coregistration_opencl(
+            group="img", reference="ref", matcher="roma_v2ref", flags="o"
+        )
+    assert not any(tmp_path.iterdir())
+
+
+def test_roma_v2ref_recovers_known_shift(session, roma_dir, romav2_dir, platform):
+    """RoMa down to 1/8 then RoMa v2's refiners: the known shift to a
+    fraction of a cell, in the control points and the dense rasters."""
+    tools = Tools(
+        env={**session.env, "ROMA_MODELS_DIR": roma_dir, "ROMAV2_MODELS_DIR": romav2_dir}
+    )
+    tools.i_coregistration_opencl(
+        group="img",
+        reference="ref",
+        matcher="roma_v2ref",
+        points="gcp_v2ref",
+        dense="v2ref",
+        tile_size=160,
+        platform=platform,
+    )
+    rows = gs.vector_db_select("gcp_v2ref", columns="dx,dy,refined", env=session.env)[
+        "values"
+    ]
+    assert len(rows) >= 100
+    assert not any(int(r[2]) for r in rows.values())
+    dx = [float(r[0]) for r in rows.values()]
+    dy = [float(r[1]) for r in rows.values()]
+    assert statistics.median(dx) == pytest.approx(SHIFT_X, abs=0.1)
+    assert statistics.median(dy) == pytest.approx(-SHIFT_Y, abs=0.1)
+    tools.r_mapcalc(
+        expression=f"v2ref_err = if(v2ref_certainty >= 0.5, abs(v2ref_dx - {SHIFT_X}))"
+    )
+    err = gs.parse_command("r.univar", map="v2ref_err", flags="ge", env=session.env)
+    assert int(err["n"]) >= 0.3 * gs.region(env=session.env)["cells"]
+    assert float(err["median"]) < 0.1

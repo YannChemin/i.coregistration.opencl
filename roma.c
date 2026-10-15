@@ -213,22 +213,24 @@ static void load_block(struct roma_model *m, struct pth_file *pf,
     }
 }
 
-static void load_vgg(struct roma_model *m, struct pth_file *pf)
+/* The first nblk blocks of VGG19-BN's features under <pre>.<index>. */
+static void load_vgg(struct roma_model *m, struct pth_file *pf, const char *pre,
+                     int nblk, cl_mem *w, cl_mem *b, int *cin_out,
+                     int *cout_out)
 {
     int blk, j, l = 0, idx = 0, cin = 3;
 
-    for (blk = 0; blk < 4; blk++) {
+    for (blk = 0; blk < nblk; blk++) {
         for (j = 0; j < vgg_blocks[blk]; j++, l++) {
             int co = vgg_width[blk];
             long shape[4] = {co, cin, 3, 3};
             char conv[64], bn[64];
 
-            snprintf(conv, sizeof(conv), "encoder.cnn.layers.%d", idx);
-            snprintf(bn, sizeof(bn), "encoder.cnn.layers.%d", idx + 1);
-            load_conv_bn(m, pf, conv, bn, co, 4, shape, &m->vgg_w[l],
-                         &m->vgg_b[l]);
-            m->vgg_cin[l] = cin;
-            m->vgg_cout[l] = co;
+            snprintf(conv, sizeof(conv), "%s.%d", pre, idx);
+            snprintf(bn, sizeof(bn), "%s.%d", pre, idx + 1);
+            load_conv_bn(m, pf, conv, bn, co, 4, shape, &w[l], &b[l]);
+            cin_out[l] = cin;
+            cout_out[l] = co;
             cin = co;
             idx += 3; /* Convolution, BatchNorm, ReLU. */
         }
@@ -359,6 +361,7 @@ static void load_refiner(struct roma_model *m, struct pth_file *pf, int s)
     r->radius = ref_radius[s];
     corr = r->radius ? (2 * r->radius + 1) * (2 * r->radius + 1) : 0;
     r->cin = 2 * r->feat + r->emb + corr;
+    r->nout = 3;
     snprintf(pre, sizeof(pre), "decoder.conv_refiner.%d", r->scale);
     for (b = 0; b <= ROMA_HIDDEN; b++) {
         long sdw[4] = {r->cin, 1, 5, 5}, spw[4] = {r->cin, r->cin, 1, 1};
@@ -406,7 +409,8 @@ void roma_load(struct roma_model *m, struct ops *ops, struct pth_file *pf,
     pth_strip_prefix(pf, "matcher.model.");
     progress_begin(PG_LOAD,
                    (pth_bytes(pf, "") + pth_bytes(dino, "")) / 1073741824.0);
-    load_vgg(m, pf);
+    load_vgg(m, pf, "encoder.cnn.layers", 4, m->vgg_w, m->vgg_b, m->vgg_cin,
+             m->vgg_cout);
     load_dino(m, dino);
     for (s = 0; s < ROMA_SCALES; s++) {
         long shape[4] = {ref_feat[s], proj_in[s], 1, 1};
@@ -441,6 +445,102 @@ void roma_load(struct roma_model *m, struct ops *ops, struct pth_file *pf,
     m->k_disp = ocl_kernel(m->ocl, "roma_disp");
     m->k_update = ocl_kernel(m->ocl, "roma_update");
     m->k_dw = ocl_kernel(m->ocl, "roma_dwconv5");
+    m->k_update2 = ocl_kernel(m->ocl, "roma2_update");
+}
+
+/* RoMa v2's refiners (index 0, 1, 2: patch 4, 2, 1): input projection
+ * (linear, feat_in -> feat), ConvRefiner blocks, and the warp and
+ * confidence heads concatenated into one (6 outputs). */
+static const int ref2_scale[ROMA2_SCALES] = {4, 2, 1};
+static const int ref2_in[ROMA2_SCALES] = {256, 128, 64};
+static const int ref2_feat[ROMA2_SCALES] = {192, 48, 12};
+static const int ref2_emb[ROMA2_SCALES] = {79, 23, 8};
+static const int ref2_radius[ROMA2_SCALES] = {3, 1, 0};
+
+static void load_refiner2(struct roma_model *m, struct pth_file *pf, int j)
+{
+    struct roma_refiner *r = &m->ref2[j];
+    char pre[64], conv[96], bn[96], name[128];
+    long sp[2] = {ref2_feat[j], ref2_in[j]}, spb[1] = {ref2_feat[j]};
+    int b, corr, k;
+
+    r->scale = ref2_scale[j];
+    r->feat = ref2_feat[j];
+    r->emb = ref2_emb[j];
+    r->radius = ref2_radius[j];
+    corr = r->radius ? (2 * r->radius + 1) * (2 * r->radius + 1) : 0;
+    r->cin = 2 * r->feat + r->emb + corr;
+    r->nout = 6;
+    snprintf(pre, sizeof(pre), "refiners.%d", r->scale);
+    snprintf(name, sizeof(name), "%s.proj.weight", pre);
+    m->proj2_w[j] = load_dev(m, pf, name, 2, sp);
+    snprintf(name, sizeof(name), "%s.proj.bias", pre);
+    m->proj2_b[j] = load_dev(m, pf, name, 1, spb);
+    m->proj2_in[j] = ref2_in[j];
+    for (b = 0; b <= ROMA_HIDDEN; b++) {
+        long sdw[4] = {r->cin, 1, 5, 5}, spw[4] = {r->cin, r->cin, 1, 1};
+        long sb[1] = {r->cin};
+        char blk[96];
+
+        if (b == 0)
+            snprintf(blk, sizeof(blk), "%s.block1", pre);
+        else
+            snprintf(blk, sizeof(blk), "%s.hidden_blocks.%d", pre, b - 1);
+        snprintf(conv, sizeof(conv), "%s.conv_depthwise", blk);
+        snprintf(bn, sizeof(bn), "%s.norm", blk);
+        load_conv_bn(m, pf, conv, bn, r->cin, 4, sdw, &r->dw_w[b], &r->dw_b[b]);
+        snprintf(name, sizeof(name), "%s.conv_pointwise.weight", blk);
+        r->pw_w[b] = load_dev(m, pf, name, 4, spw);
+        snprintf(name, sizeof(name), "%s.conv_pointwise.bias", blk);
+        r->pw_b[b] = load_dev(m, pf, name, 1, sb);
+    }
+    {
+        long se[4] = {r->emb, 2, 1, 1}, seb[1] = {r->emb};
+        long sw[4] = {2, r->cin, 1, 1}, swb[1] = {2};
+        long sc[4] = {4, r->cin, 1, 1}, scb[1] = {4};
+        float *w = G_malloc(6 * (size_t)r->cin * sizeof(float)), bias[6];
+        float *part;
+
+        snprintf(name, sizeof(name), "%s.disp_emb.weight", pre);
+        r->emb_w = load_dev(m, pf, name, 4, se);
+        snprintf(name, sizeof(name), "%s.disp_emb.bias", pre);
+        r->emb_b = load_dev(m, pf, name, 1, seb);
+        snprintf(name, sizeof(name), "%s.warp_head.weight", pre);
+        part = read_host(pf, name, 4, sw);
+        memcpy(w, part, 2 * (size_t)r->cin * sizeof(float));
+        G_free(part);
+        snprintf(name, sizeof(name), "%s.confidence_head.weight", pre);
+        part = read_host(pf, name, 4, sc);
+        memcpy(w + 2 * (size_t)r->cin, part,
+               4 * (size_t)r->cin * sizeof(float));
+        G_free(part);
+        snprintf(name, sizeof(name), "%s.warp_head.bias", pre);
+        part = read_host(pf, name, 1, swb);
+        for (k = 0; k < 2; k++)
+            bias[k] = part[k];
+        G_free(part);
+        snprintf(name, sizeof(name), "%s.confidence_head.bias", pre);
+        part = read_host(pf, name, 1, scb);
+        for (k = 0; k < 4; k++)
+            bias[2 + k] = part[k];
+        G_free(part);
+        r->out_w = upload(m, w, 6 * (size_t)r->cin, "heads");
+        r->out_b = upload(m, bias, 6, "heads");
+        G_free(w);
+    }
+}
+
+void roma_load_v2(struct roma_model *m, struct pth_file *pf)
+{
+    int j;
+
+    progress_begin(PG_LOAD, pth_bytes(pf, "") / 1073741824.0);
+    load_vgg(m, pf, "refiner_features.layers", 3, m->vgg2_w, m->vgg2_b,
+             m->vgg2_cin, m->vgg2_cout);
+    for (j = 0; j < ROMA2_SCALES; j++)
+        load_refiner2(m, pf, j);
+    progress_end();
+    m->v2 = 1;
 }
 
 static cl_mem walloc(struct roma_model *m, size_t floats, const char *what)
@@ -503,12 +603,32 @@ void roma_alloc(struct roma_model *m, int H, int W)
 
             dmax = max_sz(dmax, (size_t)m->ref[s].cin * n);
         }
+    if (m->v2)
+        for (p = 0; p < 2; p++)
+            for (s = 0; s < ROMA2_SCALES; s++) {
+                int ph = p ? H : ROMA_COARSE, pw = p ? W : ROMA_COARSE;
+                size_t n = (size_t)(ph / ref2_scale[s]) * (pw / ref2_scale[s]);
+
+                dmax = max_sz(dmax, (size_t)m->ref2[s].cin * n);
+            }
     m->d_a = walloc(m, dmax, "refiner");
     m->d_b = walloc(m, dmax, "refiner");
-    m->d_c = walloc(m, max_sz(3 * hm, (size_t)ROMA_VIT_DIM * n16), "refiner");
+    /* Displacements, refiner outputs (6 channels with RoMa v2's). */
+    m->d_c = walloc(m, max_sz(6 * hm, (size_t)ROMA_VIT_DIM * n16), "refiner");
     for (k = 0; k < 2; k++) {
         m->fl[k] = walloc(m, 2 * hm, "warp");
         m->ce[k] = walloc(m, hm, "certainty");
+    }
+    if (m->v2) {
+        for (k = 0; k < 2; k++) {
+            m->cf[k] = walloc(m, 4 * hm, "confidence");
+            for (s = 0; s < ROMA2_SCALES; s++)
+                m->P2[s][k] =
+                    walloc(m,
+                           (size_t)ref2_feat[s] * (m->hm / ref2_scale[s]) *
+                               (m->wm / ref2_scale[s]),
+                           "projected features");
+        }
     }
     m->cert16 = walloc(m, n16, "coarse certainty");
     m->lowres = walloc(m, (size_t)H * W, "coarse certainty");
@@ -826,7 +946,8 @@ static void refine(struct roma_model *m, int s, int hs, int ws, int Hf, int Wf,
     SETARG(m->k_disp, 1, cH);
     SETARG(m->k_disp, 2, cW);
     SETARG(m->k_disp, 3, fac);
-    SETARG(m->k_disp, 4, m->d_c);
+    SETARG(m->k_disp, 4, fac);
+    SETARG(m->k_disp, 5, m->d_c);
     run(m, m->k_disp, 1, &g1, NULL, "roma_disp");
     ops_conv1x1(o, m->d_c, 0, 2, (int)n, r->emb_w, r->emb_b, r->emb, m->d_a,
                 (long)2 * r->feat * n, ACT_NONE, 0);
@@ -870,6 +991,115 @@ static void refine(struct roma_model *m, int s, int hs, int ws, int Hf, int Wf,
     SETARG(m->k_update, 5, cWf);
     SETARG(m->k_update, 6, cHf);
     run(m, m->k_update, 1, &g1, NULL, "roma_update");
+}
+
+/* RoMa v2's VGG19-BN (three blocks) on m->img (3 x H x W, normalized)
+ * of image k: the features before each pooling, through the input
+ * projection of the refiner of their scale, into P2. */
+static void vgg2(struct roma_model *m, int H, int W, int k)
+{
+    struct ops *o = m->ops;
+    struct conv_geom g = ops_geom(3, 1, 1);
+    cl_mem in = m->img, out;
+    int blk, j, l = 0, h = H, w = W;
+
+    for (blk = 0; blk < 3; blk++) {
+        int r = 2 - blk; /* Refiner of scale 1, 2, 4. */
+
+        for (j = 0; j < vgg_blocks[blk]; j++, l++) {
+            out = in == m->v_a ? m->v_b : m->v_a;
+            ops_conv2d(o, in, m->vgg2_cin[l], h, w, m->vgg2_w[l], m->vgg2_b[l],
+                       m->vgg2_cout[l], &g, NULL, NULL, NULL, ACT_RELU, 0, out);
+            in = out;
+        }
+        ops_conv1x1(o, in, 0, m->proj2_in[r], h * w, m->proj2_w[r],
+                    m->proj2_b[r], m->ref2[r].feat, m->P2[r][k], 0, ACT_NONE,
+                    0);
+        if (blk < 2) {
+            out = in == m->v_a ? m->v_b : m->v_a;
+            ops_pool2d(o, in, vgg_width[blk], h, w, 2, 2, 0, 1, out);
+            in = out;
+            h /= 2;
+            w /= 2;
+        }
+    }
+}
+
+/* RoMa v2's refiner j on an hs x ws grid of a pass of size Hp x Wp:
+ * updates the warp fl and confidence cf (4 channels). As RoMa's refine
+ * but with the displacement scaled per axis by side / ROMA2_ANCHOR and
+ * RoMa v2's update. */
+static void refine2(struct roma_model *m, int j, int hs, int ws, int Hp, int Wp,
+                    cl_mem fl, cl_mem cf)
+{
+    struct ops *o = m->ops;
+    const struct roma_refiner *r = &m->ref2[j];
+    cl_int cC = r->feat, cH = hs, cW = ws, coff, cr = r->radius, cn;
+    cl_float fx = (float)Wp / ROMA2_ANCHOR, fy = (float)Hp / ROMA2_ANCHOR;
+    cl_float cWg = (float)ws, cHg = (float)hs;
+    size_t n = (size_t)hs * ws, g2[2] = {n, (size_t)r->feat}, g1 = n;
+    int b;
+
+    cn = (cl_int)n;
+    /* d = (f_A, f_B at the warp, displacement embedding, correlation). */
+    copy(m, m->P2[j][0], 0, m->d_a, 0, (size_t)r->feat * n);
+    coff = r->feat;
+    SETARG(m->k_warp, 0, m->P2[j][1]);
+    SETARG(m->k_warp, 1, cC);
+    SETARG(m->k_warp, 2, cH);
+    SETARG(m->k_warp, 3, cW);
+    SETARG(m->k_warp, 4, fl);
+    SETARG(m->k_warp, 5, m->d_a);
+    SETARG(m->k_warp, 6, coff);
+    run(m, m->k_warp, 2, g2, NULL, "roma_warp_sample");
+    SETARG(m->k_disp, 0, fl);
+    SETARG(m->k_disp, 1, cH);
+    SETARG(m->k_disp, 2, cW);
+    SETARG(m->k_disp, 3, fx);
+    SETARG(m->k_disp, 4, fy);
+    SETARG(m->k_disp, 5, m->d_c);
+    run(m, m->k_disp, 1, &g1, NULL, "roma_disp");
+    ops_conv1x1(o, m->d_c, 0, 2, (int)n, r->emb_w, r->emb_b, r->emb, m->d_a,
+                (long)2 * r->feat * n, ACT_NONE, 0);
+    if (r->radius) {
+        size_t gc = n * 64, lc = 64;
+
+        coff = 2 * r->feat + r->emb;
+        SETARG(m->k_corr, 0, m->P2[j][0]);
+        SETARG(m->k_corr, 1, m->P2[j][1]);
+        SETARG(m->k_corr, 2, cC);
+        SETARG(m->k_corr, 3, cH);
+        SETARG(m->k_corr, 4, cW);
+        SETARG(m->k_corr, 5, cr);
+        SETARG(m->k_corr, 6, fl);
+        SETARG(m->k_corr, 7, m->d_a);
+        SETARG(m->k_corr, 8, coff);
+        run(m, m->k_corr, 1, &gc, &lc, "roma_local_corr");
+    }
+    for (b = 0; b <= ROMA_HIDDEN; b++) {
+        size_t gd[3] = {(size_t)(ws + 15) / 16 * 16,
+                        (size_t)(hs + 15) / 16 * 16, (size_t)r->cin},
+               ld[3] = {16, 16, 1};
+
+        SETARG(m->k_dw, 0, m->d_a);
+        SETARG(m->k_dw, 1, cH);
+        SETARG(m->k_dw, 2, cW);
+        SETARG(m->k_dw, 3, r->dw_w[b]);
+        SETARG(m->k_dw, 4, r->dw_b[b]);
+        SETARG(m->k_dw, 5, m->d_b);
+        run(m, m->k_dw, 3, gd, ld, "roma_dwconv5");
+        ops_conv1x1(o, m->d_b, 0, r->cin, (int)n, r->pw_w[b], r->pw_b[b],
+                    r->cin, m->d_a, 0, ACT_NONE, 0);
+    }
+    ops_conv1x1(o, m->d_a, 0, r->cin, (int)n, r->out_w, r->out_b, 6, m->d_c, 0,
+                ACT_NONE, 0);
+    SETARG(m->k_update2, 0, fl);
+    SETARG(m->k_update2, 1, cf);
+    SETARG(m->k_update2, 2, m->d_c);
+    SETARG(m->k_update2, 3, cn);
+    SETARG(m->k_update2, 4, cWg);
+    SETARG(m->k_update2, 5, cHg);
+    run(m, m->k_update2, 1, &g1, NULL, "roma2_update");
 }
 
 /* Pillow's antialiased bicubic resampling (a = -0.5, support 2 scaled
@@ -997,12 +1227,13 @@ static void dump_scale(struct roma_model *m, const char *dir, int tile, int p,
 
 /* The refiners from scale index s0 to the finest of a pass of size Hp x
  * Wp, the warp starting in fl[*cur]; resized between scales. */
-static void refiners(struct roma_model *m, int p, int s0, int Hp, int Wp,
-                     float sf, int *cur, const char *dump, int tile)
+/* RoMa's refiners s0 .. s1 - 1 of pass p (size Hp x Wp). */
+static void refiners(struct roma_model *m, int p, int s0, int s1, int Hp,
+                     int Wp, float sf, int *cur, const char *dump, int tile)
 {
     int s;
 
-    for (s = s0; s < ROMA_SCALES; s++) {
+    for (s = s0; s < s1; s++) {
         int hs = side(Hp, s), ws = side(Wp, s);
 
         refine(m, s, hs, ws, Hp, Wp, sf, m->fl[*cur], m->ce[*cur]);
@@ -1011,7 +1242,7 @@ static void refiners(struct roma_model *m, int p, int s0, int Hp, int Wp,
         if (dump)
             dump_scale(m, dump, tile, p, s, m->fl[*cur], m->ce[*cur],
                        (size_t)hs * ws);
-        if (s < ROMA_SCALES - 1) {
+        if (s < s1 - 1) {
             int hn = side(Hp, s + 1), wn = side(Wp, s + 1);
 
             ops_resize(m->ops, m->fl[*cur], 2, hs, ws, m->fl[!*cur], hn, wn, 0,
@@ -1020,6 +1251,94 @@ static void refiners(struct roma_model *m, int p, int s0, int Hp, int Wp,
                        0, 0.0f);
             *cur = !*cur;
         }
+    }
+}
+
+static void zero(struct roma_model *m, cl_mem b, size_t off, size_t floats)
+{
+    cl_float z = 0.0f;
+
+    ocl_check(clEnqueueFillBuffer(m->ocl->queue, b, &z, sizeof(z),
+                                  off * sizeof(float), floats * sizeof(float),
+                                  0, NULL, NULL),
+              "clEnqueueFillBuffer");
+}
+
+/* RoMa v2's refiners of pass p (size Hp x Wp) from the warp and
+ * confidence on the current h x w grid; with zero_prec, the precision is
+ * cleared first (RoMa v2 does so before its second pass: its refiner at
+ * 1/4 gives absolute precisions). */
+static void refiners2(struct roma_model *m, int p, int Hp, int Wp, int *h,
+                      int *w, int *cur, int zero_prec, const char *dump,
+                      int tile)
+{
+    int j;
+
+    for (j = 0; j < ROMA2_SCALES; j++) {
+        int hs = Hp / ref2_scale[j], ws = Wp / ref2_scale[j];
+        size_t n = (size_t)*h * *w;
+
+        if (zero_prec && j == 0)
+            zero(m, m->cf[*cur], n, 3 * n);
+        ops_resize(m->ops, m->fl[*cur], 2, *h, *w, m->fl[!*cur], hs, ws, 0, 0,
+                   0.0f);
+        ops_resize(m->ops, m->cf[*cur], 4, *h, *w, m->cf[!*cur], hs, ws, 0, 0,
+                   0.0f);
+        *cur = !*cur;
+        refine2(m, j, hs, ws, Hp, Wp, m->fl[*cur], m->cf[*cur]);
+        if (dump) {
+            char what[64];
+
+            snprintf(what, sizeof(what), "p%d_v2s%d_flow", p, ref2_scale[j]);
+            dump_dev(m, dump, tile, what, m->fl[*cur], 2 * (size_t)hs * ws);
+            snprintf(what, sizeof(what), "p%d_v2s%d_conf", p, ref2_scale[j]);
+            dump_dev(m, dump, tile, what, m->cf[*cur], 4 * (size_t)hs * ws);
+        }
+        *h = hs;
+        *w = ws;
+    }
+}
+
+/* After RoMa's coarse pass down to 1/8 (warp and certainty logit in
+ * fl[cur], ce[cur]): RoMa v2's refiners at ROMA_COARSE, then at the
+ * tile's size, as RoMa v2's match() with its low and high resolutions.
+ * The certainty is the overlap probability, zero where the warp leaves
+ * image B. */
+static void match_v2(struct roma_model *m, int cur, const float *imgA,
+                     const float *imgB, const char *dump, int tile)
+{
+    size_t hw = (size_t)m->H * m->W, i;
+    int h = side(ROMA_COARSE, 1), w = side(ROMA_COARSE, 1), k;
+    size_t n = (size_t)h * w;
+    float *c;
+
+    zero(m, m->cf[cur], 0, 4 * n);
+    copy(m, m->ce[cur], 0, m->cf[cur], 0, n);
+    refiners2(m, 0, ROMA_COARSE, ROMA_COARSE, &h, &w, &cur, 0, dump, tile);
+    for (k = 0; k < 2; k++) {
+        prepare(k ? imgB : imgA, m->H, m->W, m->in_f[k], m->H, m->W,
+                m->imagenet);
+        ocl_write(m->ocl, m->img, 0, m->in_f[k], 3 * hw * sizeof(float));
+        vgg2(m, m->H, m->W, k);
+        if (dump)
+            dump_host(dump, tile, k ? "in_f_1" : "in_f_0", m->in_f[k], 3 * hw);
+    }
+    refiners2(m, 1, m->H, m->W, &h, &w, &cur, 1, dump, tile);
+    ocl_read(m->ocl, m->fl[cur], 0, m->flow, 2 * hw * sizeof(float));
+    ocl_read(m->ocl, m->cf[cur], 0, m->cert, hw * sizeof(float));
+    for (i = 0; i < hw; i++) {
+        float *fx = m->flow + i, *fy = m->flow + hw + i;
+
+        c = m->cert + i;
+        *c = 1.0f / (1.0f + expf(-*c));
+        if (fabsf(*fx) > 1 || fabsf(*fy) > 1)
+            *c = 0;
+        *fx = *fx < -1 ? -1 : *fx > 1 ? 1 : *fx;
+        *fy = *fy < -1 ? -1 : *fy > 1 ? 1 : *fy;
+    }
+    if (dump) {
+        dump_host(dump, tile, "flow", m->flow, 2 * hw);
+        dump_host(dump, tile, "cert", m->cert, hw);
     }
 }
 
@@ -1037,6 +1356,8 @@ void roma_match(struct roma_model *m, const float *imgA, const float *imgB,
                 ROMA_COARSE, m->imagenet);
         ocl_write(m->ocl, m->img, 0, m->in_c[k], pc * sizeof(float));
         vgg(m, ROMA_COARSE, ROMA_COARSE, k);
+        if (m->v2)
+            vgg2(m, ROMA_COARSE, ROMA_COARSE, k);
         dino(m, k, m->d_c);
         if (dump) {
             dump_host(dump, tile, k ? "in_c_1" : "in_c_0", m->in_c[k], pc);
@@ -1052,7 +1373,12 @@ void roma_match(struct roma_model *m, const float *imgA, const float *imgB,
         dump_dev(m, dump, tile, "cls_flow", m->fl[0], 2 * N16);
         dump_dev(m, dump, tile, "cls_cert", m->ce[0], N16);
     }
-    refiners(m, 0, 0, ROMA_COARSE, ROMA_COARSE, 1.0f, &cur, dump, tile);
+    refiners(m, 0, 0, m->v2 ? 2 : ROMA_SCALES, ROMA_COARSE, ROMA_COARSE, 1.0f,
+             &cur, dump, tile);
+    if (m->v2) {
+        match_v2(m, cur, imgA, imgB, dump, tile);
+        return;
+    }
 
     /* Fine pass at the tile's size, from the coarse pass's finest warp. */
     for (k = 0; k < 2; k++) {
@@ -1068,7 +1394,7 @@ void roma_match(struct roma_model *m, const float *imgA, const float *imgB,
     ops_resize(m->ops, m->ce[cur], 1, ROMA_COARSE, ROMA_COARSE, m->ce[!cur],
                side(m->H, 1), side(m->W, 1), 0, 0, 0.0f);
     cur = !cur;
-    refiners(m, 1, 1, m->H, m->W, sf, &cur, dump, tile);
+    refiners(m, 1, 1, ROMA_SCALES, m->H, m->W, sf, &cur, dump, tile);
 
     /* Certainty attenuated where the coarse one is negative, as a
      * probability; none where the warp leaves image B. */
@@ -1107,6 +1433,22 @@ static void release_block(struct roma_block *b)
         ocl_release(all[i]);
 }
 
+static void release_refiner(struct roma_refiner *r)
+{
+    int b;
+
+    for (b = 0; b <= ROMA_HIDDEN; b++) {
+        ocl_release(&r->dw_w[b]);
+        ocl_release(&r->dw_b[b]);
+        ocl_release(&r->pw_w[b]);
+        ocl_release(&r->pw_b[b]);
+    }
+    ocl_release(&r->out_w);
+    ocl_release(&r->out_b);
+    ocl_release(&r->emb_w);
+    ocl_release(&r->emb_b);
+}
+
 void roma_free(struct roma_model *m)
 {
     cl_mem *all[] = {&m->patch_w,  &m->patch_b, &m->cls,    &m->pos,
@@ -1118,9 +1460,9 @@ void roma_free(struct roma_model *m)
                      &m->g_kxy,    &m->g_p,     &m->g_mu,   &m->d_a,
                      &m->d_b,      &m->d_c,     &m->fl[0],  &m->fl[1],
                      &m->ce[0],    &m->ce[1],   &m->cert16, &m->lowres};
-    cl_kernel ks[] = {m->k_norm, m->k_cos,  m->k_cls,    m->k_warp,
-                      m->k_corr, m->k_disp, m->k_update, m->k_dw};
-    int i, s, b;
+    cl_kernel ks[] = {m->k_norm, m->k_cos,    m->k_cls, m->k_warp,   m->k_corr,
+                      m->k_disp, m->k_update, m->k_dw,  m->k_update2};
+    int i, s;
 
     for (i = 0; i < (int)(sizeof(all) / sizeof(all[0])); i++)
         ocl_release(all[i]);
@@ -1133,23 +1475,25 @@ void roma_free(struct roma_model *m)
     for (i = 0; i < ROMA_DEC_DEPTH; i++)
         release_block(&m->dec[i]);
     for (s = 0; s < ROMA_SCALES; s++) {
-        struct roma_refiner *r = &m->ref[s];
-
         ocl_release(&m->proj_w[s]);
         ocl_release(&m->proj_b[s]);
         ocl_release(&m->P[s][0]);
         ocl_release(&m->P[s][1]);
-        for (b = 0; b <= ROMA_HIDDEN; b++) {
-            ocl_release(&r->dw_w[b]);
-            ocl_release(&r->dw_b[b]);
-            ocl_release(&r->pw_w[b]);
-            ocl_release(&r->pw_b[b]);
-        }
-        ocl_release(&r->out_w);
-        ocl_release(&r->out_b);
-        ocl_release(&r->emb_w);
-        ocl_release(&r->emb_b);
+        release_refiner(&m->ref[s]);
     }
+    for (i = 0; i < 8; i++) {
+        ocl_release(&m->vgg2_w[i]);
+        ocl_release(&m->vgg2_b[i]);
+    }
+    for (s = 0; s < ROMA2_SCALES; s++) {
+        ocl_release(&m->proj2_w[s]);
+        ocl_release(&m->proj2_b[s]);
+        ocl_release(&m->P2[s][0]);
+        ocl_release(&m->P2[s][1]);
+        release_refiner(&m->ref2[s]);
+    }
+    for (i = 0; i < 2; i++)
+        ocl_release(&m->cf[i]);
     for (i = 0; i < (int)(sizeof(ks) / sizeof(ks[0])); i++)
         if (ks[i])
             clReleaseKernel(ks[i]);
