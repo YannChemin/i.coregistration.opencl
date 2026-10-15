@@ -40,7 +40,8 @@ summarization), and `PLAN.md` for the order of the work.
   kernels (local correlation, warp sampling and updates, depthwise
   convolution);
 - `disk.c`, `disk_kernels.cl`: the DISK network and its own kernels;
-  `adalam.c`: AdaLAM; `gcp.c`: control points; `image.c`: input bands.
+  `adalam.c`: AdaLAM; `gcp.c`: control points; `image.c`: input bands;
+  `dense.c`: the dense shift rasters (`dense=`).
 - `ocl_backend.c`, `pth_loader.c`, `download.c`, `progress.c`: device,
   checkpoints, downloads, progress (from i.sam.opencl).
 

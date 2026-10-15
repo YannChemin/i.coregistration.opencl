@@ -5,11 +5,15 @@ Run the module with matcher=roma and I_COREGISTRATION_OPENCL_DUMP=<dir>,
 then, in a Python environment with torch, torchvision, kornia and
 OpenCV (RoMa's imports; loguru is stubbed):
 
-    python -I reference_compare_roma.py <dir> <weights folder> <RoMa source> [tile]
+    python reference_compare_roma.py <dir> <weights folder> <RoMa source> [tile]
+        [--weights matchanything_roma.ckpt]
 
 The weights folder holds roma_outdoor.pth and dinov2_vitl14_pretrain.pth;
 the RoMa source is a clone of https://github.com/Parskatt/RoMa (romatch,
-commit 77f8d68). For the tile (default 1), on the very normalized images
+commit 77f8d68). With --weights, RoMa's weights come from that file
+instead, MatchAnything's Lightning checkpoint included (matcher=
+matchanything_roma: the dumped inputs are then not normalized, which
+the comparison inherits). For the tile (default 1), on the very normalized images
 the module used (its coarse 560 x 560 pair and its full-size pair):
 
 - dino: DINOv2's normalized patch tokens of both images;
@@ -29,6 +33,7 @@ correlation (use_custom_corr=False).
 Not a pytest test: it needs torch, the weights and RoMa's source.
 """
 
+import argparse
 import math
 import sys
 import types
@@ -79,12 +84,25 @@ def report_flow(name, mod, ref):
     )
 
 
+def load_weights(path):
+    """RoMa's state_dict, unwrapped from MatchAnything's checkpoint."""
+    sd = torch.load(path, map_location="cpu", weights_only=True)
+    sd = sd.get("state_dict", sd)
+    pre = "matcher.model."
+    return {k.removeprefix(pre): v for k, v in sd.items()}
+
+
 def main():
-    dump = Path(sys.argv[1])
-    wdir = Path(sys.argv[2])
+    ap = argparse.ArgumentParser()
+    ap.add_argument("dump", type=Path)
+    ap.add_argument("weights_dir", type=Path)
+    ap.add_argument("roma_source")
+    ap.add_argument("tile", type=int, nargs="?", default=1)
+    ap.add_argument("--weights", type=Path)
+    args = ap.parse_args()
+    dump, wdir, t = args.dump, args.weights_dir, args.tile
     stub_loguru()
-    sys.path.insert(0, sys.argv[3])
-    t = int(sys.argv[4]) if len(sys.argv) > 4 else 1
+    sys.path.insert(0, args.roma_source)
     torch.set_float32_matmul_precision("highest")
     from romatch.models.model_zoo.roma_models import roma_model
     from romatch.utils.utils import cls_to_flow_refine
@@ -98,7 +116,7 @@ def main():
         resolution=(C, C),
         upsample_preds=True,
         device="cpu",
-        weights=torch.load(wdir / "roma_outdoor.pth", map_location="cpu"),
+        weights=load_weights(args.weights or wdir / "roma_outdoor.pth"),
         dinov2_weights=torch.load(
             wdir / "dinov2_vitl14_pretrain.pth", map_location="cpu"
         ),

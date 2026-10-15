@@ -1235,6 +1235,22 @@ const struct pth_tensor *pth_find(const struct pth_file *pf, const char *name)
     return NULL;
 }
 
+int pth_strip_prefix(struct pth_file *pf, const char *prefix)
+{
+    size_t n = strlen(prefix);
+    int i, k = 0;
+
+    for (i = 0; i < pf->ntensors; i++) {
+        char *name = pf->tensors[i].name;
+
+        if (strncmp(name, prefix, n) == 0) {
+            memmove(name, name + n, strlen(name + n) + 1);
+            k++;
+        }
+    }
+    return k;
+}
+
 const struct pth_tensor *pth_require(const struct pth_file *pf,
                                      const char *name, int ndim,
                                      const long *shape)

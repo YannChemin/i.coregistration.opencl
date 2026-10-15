@@ -69,6 +69,12 @@
 #define DINOV2_SIZE 1217586395LL
 #define DINOV2_FILE "dinov2_vitl14_pretrain.pth"
 
+/* MatchAnything's RoMa weights: never downloaded by the module (see the
+ * manual for their licence), only from the authors' Google Drive. */
+#define MA_ROMA_FILE "matchanything_roma.ckpt"
+#define MA_ROMA_URL                                                            \
+    "https://drive.google.com/file/d/12L3g9-w8rR9K2L4rYaGaDJ7NqX1D713d/view"
+
 /* RoMa's dense warp sampled into matches: one per block of cells, where
  * the certainty reaches the threshold. */
 #define ROMA_SPACING 8
@@ -178,7 +184,7 @@ int main(int argc, char *argv[])
     struct dense_out dense_out;
     char *ckpt = NULL, *dino = NULL;
     int stretch = 0, tile, overlap, step, nfeat, ntx, nty, tx, ty, t = 0;
-    int nactive, i, is_eloftr, is_ma, is_roma, npe, refine;
+    int nactive, i, is_eloftr, is_ma, is_roma, is_mar, npe, refine;
     long long wsize;
     int H, W, multiple, nraw = 0, nshift = 0, ntol = 0, nref = 0;
     double lo = 0, hi = 100, max_shift = 0, tol = 0, threshold = 0;
@@ -243,11 +249,12 @@ int main(int argc, char *argv[])
     opt.matcher = G_define_option();
     opt.matcher->key = "matcher";
     opt.matcher->type = TYPE_STRING;
-    opt.matcher->options = "disk,eloftr,matchanything,roma";
+    opt.matcher->options = "disk,eloftr,matchanything,roma,matchanything_roma";
     opt.matcher->answer = "roma";
     opt.matcher->description = _("Matching method");
     G_asprintf((char **)&opt.matcher->descriptions,
-               "disk;%s;eloftr;%s;matchanything;%s;roma;%s",
+               "disk;%s;eloftr;%s;matchanything;%s;roma;%s;"
+               "matchanything_roma;%s",
                _("DISK keypoints matched and filtered by AdaLAM, on whole "
                  "cells"),
                _("Efficient LoFTR: detector-free semi-dense matches to a "
@@ -255,7 +262,9 @@ int main(int argc, char *argv[])
                _("Efficient LoFTR with MatchAnything's cross-modal "
                  "weights"),
                _("RoMa: dense warp (DINOv2 and VGG features), sampled "
-                 "where most certain"));
+                 "where most certain"),
+               _("RoMa with MatchAnything's cross-modal weights (downloaded "
+                 "by hand, see the manual)"));
     opt.matcher->guisection = _("Model");
 
     opt.checkpoint = G_define_standard_option(G_OPT_F_INPUT);
@@ -264,8 +273,9 @@ int main(int argc, char *argv[])
     opt.checkpoint->description =
         _("Weights of the matcher (DISK: depth-save.pth or "
           "epipolar-save.pth; eloftr, matchanything: model.safetensors; "
-          "roma: roma_outdoor.pth); default: in weights_dir=, downloaded "
-          "if missing");
+          "roma: roma_outdoor.pth; matchanything_roma: "
+          "matchanything_roma.ckpt); default: in weights_dir=, downloaded "
+          "if missing (except matchanything_roma's)");
     opt.checkpoint->guisection = _("Model");
 
     opt.weights_dir = G_define_standard_option(G_OPT_M_DIR);
@@ -276,7 +286,7 @@ int main(int argc, char *argv[])
           "~/models/disk, $ELOFTR_MODELS_DIR or ~/models/eloftr, "
           "$MATCHANYTHING_MODELS_DIR or ~/models/matchanything, "
           "$ROMA_MODELS_DIR or ~/models/roma, which also holds DINOv2's "
-          "weights for roma)");
+          "weights for roma and matchanything_roma)");
     opt.weights_dir->guisection = _("Model");
 
     opt.model = G_define_option();
@@ -501,15 +511,18 @@ int main(int argc, char *argv[])
     }
     is_ma = strcmp(opt.matcher->answer, "matchanything") == 0;
     is_eloftr = is_ma || strcmp(opt.matcher->answer, "eloftr") == 0;
-    is_roma = strcmp(opt.matcher->answer, "roma") == 0;
+    is_mar = strcmp(opt.matcher->answer, "matchanything_roma") == 0;
+    is_roma = is_mar || strcmp(opt.matcher->answer, "roma") == 0;
     /* RoMa's warp is finer than the correlation refinement, which made
      * its errors 3-4 times larger (tests/eval/README.md, phase 4). */
     refine = !flag.raw->answer && !is_roma;
     if (is_roma && flag.refine->answer)
-        G_warning(_("matcher=roma: its positions are not refined"));
+        G_warning(_("matcher=%s: its positions are not refined"),
+                  opt.matcher->answer);
     if (opt.dense->answer) {
         if (!is_roma)
-            G_fatal_error(_("dense= needs a dense matcher (matcher=roma)"));
+            G_fatal_error(_("dense= needs a dense matcher (matcher=roma or "
+                            "matchanything_roma)"));
         dense_check(opt.dense->answer);
     }
     multiple = is_eloftr ? ELOFTR_MULTIPLE
@@ -556,7 +569,7 @@ int main(int argc, char *argv[])
 
         if (opt.weights_dir->answer)
             dir = G_store(opt.weights_dir->answer);
-        else if (is_ma)
+        else if (is_ma || is_mar)
             dir = default_weights_dir("MATCHANYTHING_MODELS_DIR",
                                       "matchanything");
         else if (is_eloftr)
@@ -569,6 +582,17 @@ int main(int argc, char *argv[])
             ckpt = G_store(opt.checkpoint->answer);
             if (!file_exists(ckpt))
                 G_fatal_error(_("Checkpoint <%s> not found"), ckpt);
+        }
+        else if (is_mar) {
+            G_asprintf(&ckpt, "%s/%s", dir, MA_ROMA_FILE);
+            if (!file_exists(ckpt))
+                G_fatal_error(
+                    _("MatchAnything's RoMa weights <%s> not found. They are "
+                      "not downloaded automatically: read their licence in "
+                      "the manual (section MatchAnything's RoMa), then "
+                      "download weights.zip from <%s> and put "
+                      "weights/%s from it at <%s>"),
+                    ckpt, MA_ROMA_URL, MA_ROMA_FILE, ckpt);
         }
         else {
             if (is_eloftr) {
@@ -591,9 +615,14 @@ int main(int argc, char *argv[])
                           opt.matcher->answer, flag.offline->answer);
             G_free(url);
         }
-        /* RoMa's backbone: always from the weights folder. */
+        /* RoMa's backbone: from RoMa's weights folder (MatchAnything's
+         * RoMa uses the same, frozen). */
         if (is_roma) {
-            G_asprintf(&dino, "%s/%s", dir, DINOV2_FILE);
+            char *rdir = is_mar ? default_weights_dir("ROMA_MODELS_DIR", "roma")
+                                : G_store(dir);
+
+            G_asprintf(&dino, "%s/%s", rdir, DINOV2_FILE);
+            G_free(rdir);
             fetch_weights(dino, DINOV2_URL, DINOV2_SIZE, "DINOv2",
                           flag.offline->answer);
         }
@@ -644,7 +673,8 @@ int main(int argc, char *argv[])
         const char *thr = getenv("I_COREGISTRATION_OPENCL_ROMA_CERT");
 
         pth_open(&pf_dino, dino);
-        matcher_roma_create(&matcher, &ops, &pf, &pf_dino, ROMA_SPACING,
+        matcher_roma_create(&matcher, &ops, &pf, &pf_dino, opt.matcher->answer,
+                            !is_mar, ROMA_SPACING,
                             thr ? (float)atof(thr) : ROMA_MIN_CERT);
         pth_close(&pf_dino);
     }

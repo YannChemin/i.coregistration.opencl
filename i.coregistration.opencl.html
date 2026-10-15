@@ -177,7 +177,8 @@ reference.</p>
 the cell of highest certainty, when that certainty is at least 0.5. The
 <code>dist</code> of a match is one minus its certainty. The matches then go
 through the same filters, refinement and robust estimation as the other
-matchers.</p>
+matchers. With <b>dense</b>, the warp itself is written as rasters (see
+Output).</p>
 <p>The weights are the authors' outdoor ones (<code>roma_outdoor.pth</code>, MIT
 License, 425 MiB) and DINOv2's (<code>dinov2_vitl14_pretrain.pth</code>, Apache
 License 2.0, 1.1 GiB). Without <b>checkpoint</b>, RoMa's are looked for in
@@ -313,6 +314,28 @@ relative to a zero residual; 1 with <b>estimator</b>=<code>none</code>);</li>
 with <b>estimator</b>=<code>none</code>);</li>
 <li><code>inlier</code>: 1 for the active control points, 0 for the rejected ones.</li>
 </ul>
+<p>With <code>matcher=roma</code>, <b>dense</b> writes RoMa's warp over the whole
+region as three raster maps (single precision):</p>
+<ul>
+<li><code>&lt;dense&gt;_dx</code>, <code>&lt;dense&gt;_dy</code>: shift east and north from each cell of
+the image to where it lies in the reference, in map units (the same
+sign as the <code>dx</code>, <code>dy</code> columns of <b>points</b>);</li>
+<li><code>&lt;dense&gt;_certainty</code>: RoMa's certainty of that shift, 0..1.</li>
+</ul>
+<p>Neighbouring tiles are blended in their overlap (<b>tile_overlap</b>):
+each tile's weight falls linearly to its edges over the overlap width,
+and the shifts are averaged with those weights times the certainty. The
+certainty is zero, and the shifts NULL, where the warp leaves the
+reference or lands on a NULL cell of it; all three are NULL where the
+image is NULL. The rasters are the network's own estimate: none of the
+filters, the refinement or the robust estimation applies to them, so a
+vehicle that moved between the dates shows its own shift. On synthetic
+warps of a 0.5 m aerial basemap, the cells of certainty 0.5 or more
+(63 to 76 % of the cells) had median errors of 0.03 to 0.08 cell and a
+90th percentile of 0.06 to 0.16 cell, the same as RoMa's control points;
+the cells of certainty 0.1 or more (90 to 96 %) were as accurate. Mask
+the shifts with the certainty before using them, for instance with
+<em>r.mapcalc</em>. Writing them adds no measurable time.</p>
 <p>The module reports the number of matches, those dropped by each filter
 and by the robust estimation, and the median shift of the active
 control points with its median absolute deviation.</p>
@@ -379,6 +402,13 @@ Efficient LoFTR with the correlation refinement is the next most
 accurate:</p>
 <div class="code"><pre>i.coregistration.opencl group=google reference=esri points=gcp_google \
     matcher=eloftr max_shift=5 tolerance=2</pre></div>
+<h3>Dense shift rasters</h3>
+<p>Write RoMa's dense shift with its certainty, without changing the group
+(<b>-n</b>), and keep the shifts of the cells of certainty 0.5 or more:</p>
+<div class="code"><pre>i.coregistration.opencl group=google reference=esri dense=shift -n
+r.mapcalc expression=&quot;shift_sure = if(shift_certainty &gt;= 0.5, \
+    sqrt(shift_dx^2 + shift_dy^2), null())&quot;
+r.univar map=shift_sure</pre></div>
 <h3>DISK keypoints</h3>
 <p>The same pair with DISK and AdaLAM, which give fewer control points
 (none on tarmac, bare soil and other texture-poor areas) but fare better

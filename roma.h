@@ -45,6 +45,9 @@ struct roma_refiner {
 struct roma_model {
     struct ops *ops;
     struct ocl_backend *ocl;
+    /* Inputs normalized with the ImageNet mean and deviation (RoMa's
+     * transforms); MatchAnything's weights were trained on 0..1. */
+    int imagenet;
     /* VGG19-BN convolutions (BatchNorm folded), the 16 of features[:40]. */
     cl_mem vgg_w[16], vgg_b[16];
     int vgg_cin[16], vgg_cout[16];
@@ -77,10 +80,11 @@ struct roma_model {
     float *in_c[2], *in_f[2]; /* Normalized inputs of both passes. */
 };
 
-/* Read the weights: state_dict of RoMa's RegressionMatcher (roma_outdoor.pth)
- * and DINOv2 ViT-L/14 (dinov2_vitl14_pretrain.pth); fold the BatchNorms
- * and layer scales, upload. Fatal on any missing tensor or shape
- * mismatch. */
+/* Read the weights: state_dict of RoMa's RegressionMatcher (roma_outdoor.pth,
+ * or MatchAnything's matchanything_roma.ckpt, whose names carry the
+ * prefix "matcher.model.") and DINOv2 ViT-L/14 (dinov2_vitl14_pretrain.pth);
+ * fold the BatchNorms and layer scales, upload. Fatal on any missing
+ * tensor or shape mismatch. */
 void roma_load(struct roma_model *m, struct ops *ops, struct pth_file *pf,
                struct pth_file *dino);
 

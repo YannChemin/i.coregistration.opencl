@@ -467,3 +467,28 @@ Default since 2026-10-14 (late): `matcher=roma`, chosen on this
 evaluation for long-term use; existing outputs change (control points
 and their shifts, the Tucson report's included) and runs take about
 2.2 times longer. `matcher=eloftr` gives the previous default.
+
+### Dense rasters (4.4, 2026-10-15)
+
+`dense=<base>` (roma only) writes `<base>_dx`, `<base>_dy` (map units,
+signs as the points' `dx`, `dy`) and `<base>_certainty`; tiles blended
+in their overlaps (linear weights over the overlap width, times the
+certainty for the shifts), rows written as soon as final (only one row
+of tiles held). `eval_synthetic.py --dense` scores every cell against
+the known field (`p4_roma_dense`, same pairs as `p4_roma_r`; moved
+objects apart):
+
+| scenario | cells >= 0.5 | median, p90 | cells >= 0.1 | median, p90 | object cells certain and off (>= 0.5, >= 0.1) |
+|---|---|---|---|---|---|
+| translation | 76.0 % | 0.050, 0.080 | 95.4 % | 0.050, 0.082 | |
+| affine | 69.8 % | 0.031, 0.061 | 95.1 % | 0.032, 0.063 | |
+| smooth | 63.3 % | 0.046, 0.089 | 95.7 % | 0.045, 0.090 | |
+| objects | 67.6 % | 0.027, 0.056 | 89.5 % | 0.027, 0.057 | 12.8 %, 34.0 % |
+| radiometric | 65.0 % | 0.080, 0.161 | 92.3 % | 0.084, 0.173 | |
+
+The dense field is as accurate as RoMa's control points (the sampled
+best cells), and remains so down to certainty 0.1. On the moved
+objects the field follows the object (its own shift, not the
+background's): no filter applies to the rasters. Run time unchanged
+(68 s per scenario, 9 tiles of 1024). On the 256-cell pytest texture
+only about 40 % of the cells reach 0.5 (28 % with a single tile).

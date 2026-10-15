@@ -112,5 +112,17 @@ def roma_dir():
 
 
 @pytest.fixture
+def matchanything_roma_weights():
+    """Path of MatchAnything's RoMa weights (matchanything_roma.ckpt), or
+    skip."""
+    path = os.environ.get("I_COREGISTRATION_OPENCL_MATCHANYTHING_ROMA")
+    if not path or not Path(path).is_file():
+        pytest.skip(
+            "set I_COREGISTRATION_OPENCL_MATCHANYTHING_ROMA to matchanything_roma.ckpt"
+        )
+    return path
+
+
+@pytest.fixture
 def platform():
     return os.environ.get("I_COREGISTRATION_OPENCL_PLATFORM")

@@ -401,6 +401,9 @@ void roma_load(struct roma_model *m, struct ops *ops, struct pth_file *pf,
     memset(m, 0, sizeof(*m));
     m->ops = ops;
     m->ocl = ops->ocl;
+    m->imagenet = 1;
+    /* MatchAnything's Lightning checkpoint. */
+    pth_strip_prefix(pf, "matcher.model.");
     progress_begin(PG_LOAD,
                    (pth_bytes(pf, "") + pth_bytes(dino, "")) / 1073741824.0);
     load_vgg(m, pf);
@@ -920,9 +923,10 @@ static void resize_axis(const float *in, int n_in, long in_stride, float *out,
     }
 }
 
-/* (3, H, W) in 0..1 resized to (3, h, w) and normalized (ImageNet mean
- * and deviation, as RoMa's transforms). */
-static void prepare(const float *in, int H, int W, float *out, int h, int w)
+/* (3, H, W) in 0..1 resized to (3, h, w), normalized with the ImageNet
+ * mean and deviation (RoMa's transforms) when imagenet is set. */
+static void prepare(const float *in, int H, int W, float *out, int h, int w,
+                    int imagenet)
 {
     size_t p = (size_t)h * w;
     int c;
@@ -940,6 +944,8 @@ static void prepare(const float *in, int H, int W, float *out, int h, int w)
         }
         G_free(tmp);
     }
+    if (!imagenet)
+        return;
     for (c = 0; c < 3; c++) {
         size_t i;
 
@@ -1028,7 +1034,7 @@ void roma_match(struct roma_model *m, const float *imgA, const float *imgB,
     /* Coarse pass. */
     for (k = 0; k < 2; k++) {
         prepare(k ? imgB : imgA, m->H, m->W, m->in_c[k], ROMA_COARSE,
-                ROMA_COARSE);
+                ROMA_COARSE, m->imagenet);
         ocl_write(m->ocl, m->img, 0, m->in_c[k], pc * sizeof(float));
         vgg(m, ROMA_COARSE, ROMA_COARSE, k);
         dino(m, k, m->d_c);
@@ -1050,7 +1056,8 @@ void roma_match(struct roma_model *m, const float *imgA, const float *imgB,
 
     /* Fine pass at the tile's size, from the coarse pass's finest warp. */
     for (k = 0; k < 2; k++) {
-        prepare(k ? imgB : imgA, m->H, m->W, m->in_f[k], m->H, m->W);
+        prepare(k ? imgB : imgA, m->H, m->W, m->in_f[k], m->H, m->W,
+                m->imagenet);
         ocl_write(m->ocl, m->img, 0, m->in_f[k], 3 * hw * sizeof(float));
         vgg(m, m->H, m->W, k);
         if (dump)

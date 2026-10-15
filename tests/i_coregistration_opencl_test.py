@@ -3,6 +3,7 @@
 
 import math
 import statistics
+from pathlib import Path
 
 import grass.script as gs
 import pytest
@@ -69,6 +70,23 @@ def test_matchanything_offline(session, tmp_path):
             matcher="matchanything",
             weights_dir=str(tmp_path),
             flags="o",
+        )
+    assert not any(tmp_path.iterdir())
+
+
+def test_matchanything_roma_not_downloaded(session, tmp_path):
+    """MatchAnything's RoMa weights are never downloaded: the error says
+    where to get them."""
+    tools = Tools(session=session)
+
+    with pytest.raises(ToolError, match="not downloaded automatically"):
+        tools.i_coregistration_opencl(
+            group="img",
+            reference="ref",
+            matcher="matchanything_roma",
+            weights_dir=str(tmp_path),
+            points="p",
+            flags="n",
         )
     assert not any(tmp_path.iterdir())
 
@@ -264,3 +282,29 @@ def test_roma_recovers_known_shift(session, roma_dir, platform):
         )
         assert float(err["median"]) < 0.1
         assert float(err["percentile_90"]) < 0.25
+
+
+def test_matchanything_roma_recovers_known_shift(
+    session, matchanything_roma_weights, roma_dir, platform
+):
+    """RoMa with MatchAnything's weights (inputs not normalized) gives the
+    known shift to a fraction of a cell, never refined."""
+    tools = Tools(env={**session.env, "ROMA_MODELS_DIR": roma_dir})
+    tools.i_coregistration_opencl(
+        group="img",
+        reference="ref",
+        matcher="matchanything_roma",
+        weights_dir=str(Path(matchanything_roma_weights).parent),
+        points="gcp_ma_roma",
+        tile_size=256,
+        platform=platform,
+    )
+    rows = gs.vector_db_select(
+        "gcp_ma_roma", columns="dx,dy,refined", env=session.env
+    )["values"]
+    assert len(rows) >= 100
+    assert not any(int(r[2]) for r in rows.values())
+    dx = [float(r[0]) for r in rows.values()]
+    dy = [float(r[1]) for r in rows.values()]
+    assert statistics.median(dx) == pytest.approx(SHIFT_X, abs=0.1)
+    assert statistics.median(dy) == pytest.approx(-SHIFT_Y, abs=0.1)

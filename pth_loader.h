@@ -46,6 +46,10 @@ const struct pth_tensor *pth_require(const struct pth_file *pf,
                                      const char *name, int ndim,
                                      const long *shape);
 
+/* Remove prefix from the names of the tensors that start with it
+ * (wrappers such as Lightning's "matcher.model."); returns their number. */
+int pth_strip_prefix(struct pth_file *pf, const char *prefix);
+
 long pth_numel(const struct pth_tensor *t);
 
 /* Total storage bytes of the tensors whose names start with prefix. */

@@ -332,16 +332,16 @@ Gaussian process solved on the host in double precision. Parity with
 the authors' code (`tests/reference_compare_roma.py`): final warp within
 4.6e-4 cell, certainty within 3e-5. The dense warp is sampled into
 matches (best cell of each 8 x 8 block, certainty >= 0.5) for the
-existing filters and robust stage; 4.4's dense `dx`/`dy`/certainty
-rasters are not written yet. Eval in `tests/eval/README.md`: the most
+existing filters and robust stage; 4.4's dense rasters are written by
+`dense=` (2026-10-15, `dense.c`: tiles blended, as accurate as the
+control points on every cell of certainty >= 0.1). Eval in `tests/eval/README.md`: the most
 accurate matcher on every test (synthetic 0.03-0.08 cell, basemap LOO
 p90 0.25-0.32 m, cross-modal 3.2-3.7 m), the NCC refinement makes it
 worse (so never applied to it), 2.2 times Efficient LoFTR's run time.
 Made the default (long-term addon rule). Open: RoMa v2 (DINOv3 licence
 decision), MatchAnything's RoMa weights (Google Drive only, Project
 Registration License: the user's decision, and their model code has a
-configurable backbone to check), dense rasters (4.4), the symmetric
-mode.
+configurable backbone to check), the symmetric mode.
 
 ## Phase 5. Dense match summarization
 

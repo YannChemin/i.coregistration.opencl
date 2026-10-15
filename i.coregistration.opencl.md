@@ -198,7 +198,8 @@ The warp is turned into matches by blocks of 8 x 8 cells: in each block,
 the cell of highest certainty, when that certainty is at least 0.5. The
 `dist` of a match is one minus its certainty. The matches then go
 through the same filters, refinement and robust estimation as the other
-matchers.
+matchers. With **dense**, the warp itself is written as rasters (see
+Output).
 
 The weights are the authors' outdoor ones (`roma_outdoor.pth`, MIT
 License, 425 MiB) and DINOv2's (`dinov2_vitl14_pretrain.pth`, Apache
@@ -225,6 +226,60 @@ control points than Efficient LoFTR (at most one per block) and only
 one match on moved objects passed the robust estimation (16 for
 Efficient LoFTR). It is the default matcher; Efficient LoFTR is about
 twice as fast for a looser fit.
+
+### MatchAnything's RoMa
+
+MatchAnything (see above) also trained RoMa on its cross-modal pairs.
+With `matcher=matchanything_roma`, the RoMa above runs those weights:
+the same network and the same frozen DINOv2, but the images are given
+in 0..1 without the ImageNet normalization, as the authors trained and
+test them. On a 1024-cell tile, the warp agreed with the authors' code
+within 5e-4 cell and the certainty within 5e-5
+(`tests/reference_compare_roma.py --weights`). The positions are never
+refined by correlation, and **dense** works as with `roma`.
+
+MAEVAL
+
+These weights are **not downloaded by the module**, because of their
+licence. They are published only on the authors' Google Drive, as
+`weights.zip` (461 MiB, with the Efficient LoFTR weights too), linked
+from their repository's README:
+
+- URL: <https://drive.google.com/file/d/12L3g9-w8rR9K2L4rYaGaDJ7NqX1D713d/view>
+- File to keep: `weights/matchanything_roma.ckpt` in the archive (425
+  MiB, a PyTorch Lightning checkpoint).
+- Place: **weights_dir**, by default `$MATCHANYTHING_MODELS_DIR` or
+  `~/models/matchanything`, as `matchanything_roma.ckpt` (or give the
+  file with **checkpoint**).
+- DINOv2's weights are read from RoMa's folder (`$ROMA_MODELS_DIR` or
+  `~/models/roma`), and downloaded there when missing (Apache License
+  2.0, see RoMa).
+
+For example:
+
+```sh
+mkdir -p ~/models/matchanything
+cd $(mktemp -d)
+# Download weights.zip from the URL above into this folder, then:
+unzip weights.zip
+mv weights/matchanything_roma.ckpt ~/models/matchanything/
+```
+
+Licence: the archive states none of its own. The authors' repository
+(<https://github.com/zju3dv/MatchAnything>), which before held only a
+README, has been under their Project Registration License 1.0 since
+2026-09-15. Use for research, education, evaluation and personal
+purposes is free, without registration. Use by a company or other
+organization in any project (commercial or not, internal or not, from
+development to production) is free too but must be registered before
+it begins, through the Google form given in the licence (name of the
+organization, a contact, the project and its intended use); permission
+is then granted automatically, one registration per project. Copies
+must carry the licence, and those who receive them must register in
+turn. The licence names no governing law and has no clause on changing
+its terms. Read it in that repository
+before downloading, and register when it applies to you. This module
+contains none of the authors' code or weights.
 
 ### Filters and refinement
 
@@ -347,6 +402,29 @@ positions, with the attribute columns:
   with **estimator**=`none`);
 - `inlier`: 1 for the active control points, 0 for the rejected ones.
 
+With `matcher=roma`, **dense** writes RoMa's warp over the whole
+region as three raster maps (single precision):
+
+- `<dense>_dx`, `<dense>_dy`: shift east and north from each cell of
+  the image to where it lies in the reference, in map units (the same
+  sign as the `dx`, `dy` columns of **points**);
+- `<dense>_certainty`: RoMa's certainty of that shift, 0..1.
+
+Neighbouring tiles are blended in their overlap (**tile_overlap**):
+each tile's weight falls linearly to its edges over the overlap width,
+and the shifts are averaged with those weights times the certainty. The
+certainty is zero, and the shifts NULL, where the warp leaves the
+reference or lands on a NULL cell of it; all three are NULL where the
+image is NULL. The rasters are the network's own estimate: none of the
+filters, the refinement or the robust estimation applies to them, so a
+vehicle that moved between the dates shows its own shift. On synthetic
+warps of a 0.5 m aerial basemap, the cells of certainty 0.5 or more
+(63 to 76 % of the cells) had median errors of 0.03 to 0.08 cell and a
+90th percentile of 0.06 to 0.16 cell, the same as RoMa's control points;
+the cells of certainty 0.1 or more (90 to 96 %) were as accurate. Mask
+the shifts with the certainty before using them, for instance with
+*r.mapcalc*. Writing them adds no measurable time.
+
 The module reports the number of matches, those dropped by each filter
 and by the robust estimation, and the median shift of the active
 control points with its median absolute deviation.
@@ -433,6 +511,18 @@ accurate:
 ```sh
 i.coregistration.opencl group=google reference=esri points=gcp_google \
     matcher=eloftr max_shift=5 tolerance=2
+```
+
+### Dense shift rasters
+
+Write RoMa's dense shift with its certainty, without changing the group
+(**-n**), and keep the shifts of the cells of certainty 0.5 or more:
+
+```sh
+i.coregistration.opencl group=google reference=esri dense=shift -n
+r.mapcalc expression="shift_sure = if(shift_certainty >= 0.5, \
+    sqrt(shift_dx^2 + shift_dy^2), null())"
+r.univar map=shift_sure
 ```
 
 ### DISK keypoints

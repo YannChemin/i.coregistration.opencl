@@ -78,12 +78,23 @@ state, how to build, test and run, and what is still to be decided.
   is in the user site; loguru is stubbed). The pth loader now skips
   integer tensors (BatchNorm's num_batches_tracked) and unwraps
   `_rebuild_from_type_v2` (DINOv2's file).
+- Dense rasters (2026-10-15): `dense=<base>` (roma only) writes
+  `<base>_dx`, `_dy` (map units) and `_certainty`, tiles blended
+  (`dense.c`; matchers expose a `field` callback). Eval:
+  `eval_synthetic.py --dense` (tests/eval/README.md).
 
 ## Next step
 
-Open phase 4 items (PLAN.md 4.6 status): RoMa v2 / DINOv3 and
-MatchAnything's RoMa weights need the user's licence decisions; the
-dense dx/dy/certainty rasters (4.4); then phase 5.
+Licence policy (user, 2026-10-15): the default run downloads its
+permissively licensed weights itself; weights under particular licences
+are opt-in matchers, never downloaded by the module: the manual and the
+error message give the URL, the licence and the path. Next: RoMa v2
+(`romav2.0.1.pt` from github.com/Parskatt/RoMaV2 release v2.0.1, DINOv3
+License; expected in `~/models/romav2`) and MatchAnything's RoMa
+(`matchanything_roma.ckpt` from the Google Drive `weights.zip` of the
+MatchAnything README; DINOv2-large backbone as RoMa v1; expected in
+`~/models/matchanything`), once the user has downloaded them; then
+phase 5.
 
 ## Build, test, run
 
