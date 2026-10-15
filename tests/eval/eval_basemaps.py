@@ -97,6 +97,16 @@ def read_points(name):
     return a[active, :4], int((~active).sum()), sd
 
 
+def coverage(pts, region, block):
+    """Share of the block x block cells of the region holding a point."""
+    nx = int(np.ceil(region["cols"] / block))
+    ny = int(np.ceil(region["rows"] / block))
+    ix = ((pts[:, 0] - region["w"]) / region["ewres"] / block).astype(int)
+    iy = ((region["n"] - pts[:, 1]) / region["nsres"] / block).astype(int)
+    ok = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
+    return round(len(set(zip(ix[ok], iy[ok]))) / (nx * ny), 4)
+
+
 def sd_vs_residual(sd, res):
     """How well the predicted standard deviations rank the leave-one-out
     residuals: Spearman correlation, and the residuals' 90th percentile in
@@ -246,6 +256,7 @@ def main():
             r[f"loo{order}_p90"] = (
                 round(float(np.percentile(loo, 90)), 3) if loo is not None else None
             )
+        r["coverage32"] = coverage(pts, region, 32)
         loo = loo_residuals(pts, 2, region)
         if loo is not None:
             r.update(sd_vs_residual(sd, loo))
@@ -286,6 +297,7 @@ def main():
         "loo1_p90",
         "loo2_median",
         "loo2_p90",
+        "coverage32",
         "sd_median",
         "sd_spearman",
         "loo2_p90_low_sd",

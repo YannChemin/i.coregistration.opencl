@@ -91,6 +91,18 @@ def test_matchanything_roma_not_downloaded(session, tmp_path):
     assert not any(tmp_path.iterdir())
 
 
+def test_max_sd_needs_roma_v2ref(session):
+    """max_sd= only applies to a matcher that predicts a standard
+    deviation."""
+    tools = Tools(session=session)
+
+    with pytest.raises(ToolError, match="max_sd="):
+        tools.i_coregistration_opencl(
+            group="img", reference="ref", matcher="roma", max_sd=1, points="p",
+            flags="n",
+        )
+
+
 def test_rejects_file_that_is_not_a_checkpoint(session, tmp_path):
     """A file that is neither a zip nor a legacy PyTorch checkpoint fails
     before any matching."""
@@ -362,6 +374,23 @@ def test_roma_v2ref_recovers_known_shift(session, roma_dir, romav2_dir, platform
     assert statistics.median(sds) < 0.5
     sdr = gs.parse_command("r.univar", map="v2ref_sd", flags="g", env=session.env)
     assert int(sdr["n"]) > 0 and float(sdr["min"]) > 0
+    # max_sd= drops the matches above it.
+    cut = statistics.median(sds)
+    tools.i_coregistration_opencl(
+        group="img",
+        reference="ref",
+        matcher="roma_v2ref",
+        points="gcp_v2ref_cut",
+        max_sd=cut,
+        tile_size=160,
+        platform=platform,
+        flags="n",
+    )
+    kept = gs.vector_db_select("gcp_v2ref_cut", columns="sd", env=session.env)[
+        "values"
+    ]
+    assert 0 < len(kept) < len(sds)
+    assert all(float(r[0]) <= cut + 1e-4 for r in kept.values())
     tools.r_mapcalc(
         expression=f"v2ref_err = if(v2ref_certainty >= 0.5, abs(v2ref_dx - {SHIFT_X}))"
     )
