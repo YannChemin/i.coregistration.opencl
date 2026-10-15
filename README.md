@@ -23,6 +23,7 @@ summarization), and `PLAN.md` for the order of the work.
 - `matcher.h`, `matcher.c`: the matcher interface (device stage, host
   matching, dumps); `matcher_disk.c`: DISK + AdaLAM behind it;
   `matcher_eloftr.c`: Efficient LoFTR; `matcher_roma.c`: RoMa's warp
+  (also with MatchAnything's weights, or with RoMa v2's refiners)
   sampled into matches.
 - `ops.cl`, `ops.c`, `ops.h`: generic tensor kernels shared by the
   matchers (GEMM, convolutions, normalizations, activations, softmax,
@@ -70,6 +71,10 @@ headers and ICD loader, libcurl (download of the weights) and OpenMP.
   <https://github.com/Parskatt/RoMa> (MIT) and DINOv2's
   `dinov2_vitl14_pretrain.pth` (Apache 2.0, 1.1 GiB), both looked for in
   `$ROMA_MODELS_DIR` or `~/models/roma`.
+- `matcher=roma_v2ref`: RoMa's weights as above and RoMa v2's refiners
+  without DINOv3, `romav2_refiners.pt` of
+  <https://github.com/YannChemin/romav2-refiners> (MIT), looked for in
+  `$ROMAV2_MODELS_DIR` or `~/models/romav2`.
 
 All the above are downloaded when missing (`-o` to forbid). Weights
 under more restrictive licences are opt-in and never downloaded by the
@@ -96,6 +101,7 @@ I_COREGISTRATION_OPENCL_ELOFTR=~/models/eloftr/model.safetensors \
 I_COREGISTRATION_OPENCL_MATCHANYTHING=~/models/matchanything/model.safetensors \
 I_COREGISTRATION_OPENCL_ROMA=~/models/roma \
 I_COREGISTRATION_OPENCL_MATCHANYTHING_ROMA=~/models/matchanything/matchanything_roma.ckpt \
+I_COREGISTRATION_OPENCL_ROMAV2=~/models/romav2 \
     grass --tmp-project XY --exec python3 -m pytest tests
 ```
 

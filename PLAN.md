@@ -345,8 +345,9 @@ configurable backbone to check), the symmetric mode. 2026-10-15:
 MatchAnything's RoMa weights run as `matcher=matchanything_roma` (same
 network, no input normalization; never downloaded, PRL), less accurate
 than RoMa's own here. RoMa v2: DINOv3 License not accepted by the user;
-evaluating RoMa v1's coarse warp into RoMa v2's refiners (MIT, VGG
-features only) instead.
+RoMa v1's coarse warp into RoMa v2's refiners (MIT, VGG features only)
+instead: `matcher=roma_v2ref`, better or equal to roma on every test,
+20 % faster (tests/eval/README.md).
 
 ## Phase 5. Dense match summarization
 

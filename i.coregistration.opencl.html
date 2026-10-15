@@ -203,6 +203,42 @@ control points than Efficient LoFTR (at most one per block) and only
 one match on moved objects passed the robust estimation (16 for
 Efficient LoFTR). It is the default matcher; Efficient LoFTR is about
 twice as fast for a looser fit.</p>
+<h3>RoMa with RoMa v2's refiners</h3>
+<p>RoMa v2, by the authors of RoMa (a preprint, not yet peer reviewed:
+<a href="https://github.com/Parskatt/RoMaV2">https://github.com/Parskatt/RoMaV2</a>), matches on features of DINOv3,
+whose licence brings terms this module does not take on (Meta's DINOv3
+License Agreement: California law, terms that Meta may change, uses
+excluded). Its refiners, however, see none of DINOv3: they refine a
+coarse warp from VGG19-BN features of their own, at 1/4, 1/2 and full
+resolution, and also give each cell a covariance of its position. With
+<code>matcher=roma_v2ref</code>, RoMa runs as above down to its refiner at 1/8 of
+the coarse pass (DINOv2's features, Gaussian process, coordinate
+decoder), then RoMa v2's refiners run from that warp at 560 x 560 cells
+and again at the tile's size, as RoMa v2 does with its own matcher; the
+certainty is RoMa v2's overlap probability, zero where the warp leaves
+the reference. On a 1024-cell tile, the warp agreed with the authors'
+code within 1.5e-3 cell (99 % within 1e-4) and the certainty within
+2e-5 (<code>tests/reference_compare_roma2.py</code>). Positions are never refined
+by correlation, and <b>dense</b> works as with <code>roma</code>.</p>
+<p>On the Tucson evaluation, it was as accurate as <code>roma</code> or more, and
+about 20 % faster (its second pass runs three refiners instead of
+four): median errors of 0.02 to 0.09 cell on the synthetic warps (90th
+percentiles 0.05 to 0.16 cell against 0.07 to 0.18) with 6 to 25 % more
+control points and 74 to 90 % of the cells certain (63 to 76 %); the
+same residuals between basemaps (leave-one-out 90th percentile 0.23 to
+0.31 m), though with 10 to 33 % fewer control points there; and between
+the hyperspectral scene and the basemaps a 90th percentile of 3.0 to
+3.2 m in true colour (3.2 to 3.5 m) and 3.4 to 3.7 m in SWIR/NIR (3.6
+to 3.7 m), with 4 to 19 % more control points.</p>
+<p>The refiners' weights are those of RoMa v2's release (MIT License),
+without its DINOv3 backbone and its coarse matcher: the file
+<code>romav2_refiners.pt</code> (20 MiB) holds only the <code>refiners</code> and
+<code>refiner_features</code> tensors of the authors' <code>romav2.0.1.pt</code>, extracted
+by a script published with it at
+<a href="https://github.com/YannChemin/romav2-refiners">https://github.com/YannChemin/romav2-refiners</a>. It is looked for in
+<code>$ROMAV2_MODELS_DIR</code> or <code>~/models/romav2</code> and downloaded there when
+missing (unless <b>-o</b>); RoMa's and DINOv2's weights are those of
+<code>roma</code>, in RoMa's folder.</p>
 <h3>MatchAnything's RoMa</h3>
 <p>MatchAnything (see above) also trained RoMa on its cross-modal pairs.
 With <code>matcher=matchanything_roma</code>, the RoMa above runs those weights:

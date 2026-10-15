@@ -519,3 +519,40 @@ Less accurate everywhere, more points across modalities. The
 cross-modal median east shift is the same as RoMa's (-3.1 to -3.8 m),
 so that shift does not come from RoMa's own weights. Not a default;
 kept as an option for modalities further apart (thermal, SAR, maps).
+
+### RoMa with RoMa v2's refiners (2026-10-15)
+
+The user does not accept the DINOv3 License, which RoMa v2's matcher
+needs. RoMa v2's refiners (1/4, 1/2, 1/1) use only their own VGG19-BN,
+so `matcher=roma_v2ref` runs RoMa v1 down to its 1/8 refiner of the
+coarse pass, then RoMa v2's refiners at 560 and at the tile's size (as
+RoMa v2's low and high resolutions; precision cleared before the second
+pass). Weights: `romav2_refiners.pt` (20 MiB, the `refiners.*` and
+`refiner_features.*` tensors of `romav2.0.1.pt`, MIT), published at
+https://github.com/YannChemin/romav2-refiners (release
+`v2.0.1-refiners`) and downloaded by the module. A PyTorch prototype on
+one 1024 tile first compared three hand-over points (after RoMa's
+coarse pass, after its 1/8, after its full result): all gave 5-17 %
+lower median errors than RoMa alone; the 1/8 hand-over had the most
+certain cells and the least work. Parity of the OpenCL version
+(`reference_compare_roma2.py`): final warp within 1.4e-3 cell (p99
+6e-5), overlap within 1.9e-5.
+
+| test | roma_v2ref | roma |
+|---|---|---|
+| synthetic median (cells) | 0.024-0.087 | 0.029-0.084 |
+| synthetic p90 (cells) | 0.049-0.162 | 0.071-0.176 |
+| synthetic points | 81797-95882 | 72728-84531 |
+| synthetic dense cells >= 0.5 | 74-90 % | 63-76 % |
+| synthetic wall time per scenario (9 tiles of 1024) | 54.5 s | 68 s |
+| moved-object leaks (points; dense cells >= 0.5) | 0; 10.6 % | 1; 12.8 % |
+| basemaps LOO p90 (m) | 0.234-0.313 | 0.246-0.319 |
+| basemaps points | 129744-199843 | 187083-220921 |
+| basemaps loop closure median, p90 (m) | 0.062, 0.160 | 0.075, 0.158 |
+| true colour LOO p90 (m), points | 2.96-3.19, 5743-6103 | 3.23-3.46, 5120-5269 |
+| SWIR/NIR LOO p90 (m), points | 3.43-3.66, 5171-5589 | 3.55-3.74, 4780-4948 |
+
+Better or equal everywhere, 20 % faster; fewer control points on the
+basemaps (its overlap probability falls below 0.5 more often between
+dates), more everywhere else. The cross-modal east shift is unchanged
+(-3.0 to -3.9 m).

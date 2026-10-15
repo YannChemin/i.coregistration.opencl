@@ -88,6 +88,14 @@ state, how to build, test and run, and what is still to be decided.
   DINOv2 from `~/models/roma`). Parity 4.6e-4 cell; less accurate than
   `roma` on every Tucson test (tests/eval/README.md).
   `I_COREGISTRATION_OPENCL_MATCHANYTHING_ROMA=<ckpt>` enables its pytest.
+- `matcher=roma_v2ref` (2026-10-15): RoMa v1 to its 1/8 refiner, then
+  RoMa v2's refiners (no DINOv3: the user rejects its licence). Weights
+  `romav2_refiners.pt` from https://github.com/YannChemin/romav2-refiners
+  (public, created at the user's request; downloaded by the module into
+  `$ROMAV2_MODELS_DIR` or `~/models/romav2`). Parity
+  `tests/reference_compare_roma2.py` (venv_kornia, not `-I`): 1.4e-3
+  cell. Best or equal on every Tucson test, 20 % faster than roma.
+  `I_COREGISTRATION_OPENCL_ROMAV2=<folder>` enables its pytest.
 
 ## Next step
 
@@ -98,10 +106,8 @@ error message give the URL, the licence and the path. Next: RoMa v2
 (`romav2.0.1.pt` from github.com/Parskatt/RoMaV2 release v2.0.1, in
 `~/models/romav2` on both machines). The user does not accept the DINOv3
 License (California law, Meta may change the terms): never load the
-`f.*` tensors (DINOv3) of that file. Path being evaluated: RoMa v1's
-coarse warp (DINOv2) into RoMa v2's refiners (`refiners.*`,
-`refiner_features.*`, MIT); prototype in the session scratchpad
-(hybrid.py). Then phase 5.
+`f.*` tensors (DINOv3) of that file; done as `matcher=roma_v2ref`.
+Open: whether it becomes the default (the user's call); then phase 5.
 
 ## Build, test, run
 
@@ -118,6 +124,7 @@ coarse warp (DINOv2) into RoMa v2's refiners (`refiners.*`,
   I_COREGISTRATION_OPENCL_MATCHANYTHING=~/models/matchanything/model.safetensors
   I_COREGISTRATION_OPENCL_ROMA=~/models/roma
   I_COREGISTRATION_OPENCL_MATCHANYTHING_ROMA=~/models/matchanything/matchanything_roma.ckpt
+  I_COREGISTRATION_OPENCL_ROMAV2=~/models/romav2
   grass --tmp-project XY --exec python3 -m pytest tests`. To test a
   build that is not installed (the server builds), also set
   `I_COREGISTRATION_OPENCL_BINDIR=<build>/bin`: the GRASS session puts the

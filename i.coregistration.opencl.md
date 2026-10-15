@@ -246,7 +246,16 @@ code within 1.5e-3 cell (99 % within 1e-4) and the certainty within
 2e-5 (`tests/reference_compare_roma2.py`). Positions are never refined
 by correlation, and **dense** works as with `roma`.
 
-V2EVAL
+On the Tucson evaluation, it was as accurate as `roma` or more, and
+about 20 % faster (its second pass runs three refiners instead of
+four): median errors of 0.02 to 0.09 cell on the synthetic warps (90th
+percentiles 0.05 to 0.16 cell against 0.07 to 0.18) with 6 to 25 % more
+control points and 74 to 90 % of the cells certain (63 to 76 %); the
+same residuals between basemaps (leave-one-out 90th percentile 0.23 to
+0.31 m), though with 10 to 33 % fewer control points there; and between
+the hyperspectral scene and the basemaps a 90th percentile of 3.0 to
+3.2 m in true colour (3.2 to 3.5 m) and 3.4 to 3.7 m in SWIR/NIR (3.6
+to 3.7 m), with 4 to 19 % more control points.
 
 The refiners' weights are those of RoMa v2's release (MIT License),
 without its DINOv3 backbone and its coarse matcher: the file
