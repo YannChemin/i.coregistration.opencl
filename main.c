@@ -24,6 +24,7 @@
 #include <grass/raster.h>
 
 #include "adalam.h"
+#include "dense.h"
 #include "disk.h"
 #include "download.h"
 #include "eloftr.h"
@@ -158,7 +159,7 @@ int main(int argc, char *argv[])
             *checkpoint, *weights_dir, *model, *points, *percentile, *features,
             *tile_size, *tile_overlap, *area_ratio, *search_expansion,
             *ransac_iters, *min_inliers, *min_confidence, *max_shift,
-            *tolerance, *estimator, *tile_model, *model_opt, *threshold,
+            *tolerance, *estimator, *tile_model, *model_opt, *threshold, *dense,
             *device, *platform;
     } opt;
     struct {
@@ -174,6 +175,7 @@ int main(int argc, char *argv[])
     struct adalam_config *cfg = &dcfg.adalam;
     struct match_list ml = {0, 0, NULL};
     struct gcp_list gl = {0, 0, NULL};
+    struct dense_out dense_out;
     char *ckpt = NULL, *dino = NULL;
     int stretch = 0, tile, overlap, step, nfeat, ntx, nty, tx, ty, t = 0;
     int nactive, i, is_eloftr, is_ma, is_roma, npe, refine;
@@ -182,7 +184,7 @@ int main(int argc, char *argv[])
     double lo = 0, hi = 100, max_shift = 0, tol = 0, threshold = 0;
     int est_kind, tile_type, region_type, nkept = 0, nfail = 0;
     struct robust_config tcfg, rcfg;
-    float *img1, *img2;
+    float *img1, *img2, *fdx = NULL, *fdy = NULL, *fce = NULL;
     unsigned char *v1, *v2;
     const char *dump;
 
@@ -229,6 +231,14 @@ int main(int argc, char *argv[])
     opt.points->description =
         _("Name for output vector map of the control points (at their "
           "reference positions, with source position and shift)");
+
+    opt.dense = G_define_standard_option(G_OPT_R_BASENAME_OUTPUT);
+    opt.dense->key = "dense";
+    opt.dense->required = NO;
+    opt.dense->description =
+        _("Basename of the output dense shift rasters (matcher=roma): "
+          "<dense>_dx east and <dense>_dy north from the image to the "
+          "reference, in map units, and <dense>_certainty, 0..1");
 
     opt.matcher = G_define_option();
     opt.matcher->key = "matcher";
@@ -477,8 +487,9 @@ int main(int argc, char *argv[])
     if (flag.refine->answer)
         G_warning(_("-s is deprecated: the sub-cell refinement is the "
                     "default"));
-    if (flag.dry->answer && !opt.points->answer)
-        G_fatal_error(_("With -n, give points= or nothing is written"));
+    if (flag.dry->answer && !opt.points->answer && !opt.dense->answer)
+        G_fatal_error(_("With -n, give points= or dense= or nothing is "
+                        "written"));
     if (opt.percentile->answer) {
         if (!opt.percentile->answers[1])
             G_fatal_error(_("percentile= needs two values, low,high"));
@@ -496,6 +507,11 @@ int main(int argc, char *argv[])
     refine = !flag.raw->answer && !is_roma;
     if (is_roma && flag.refine->answer)
         G_warning(_("matcher=roma: its positions are not refined"));
+    if (opt.dense->answer) {
+        if (!is_roma)
+            G_fatal_error(_("dense= needs a dense matcher (matcher=roma)"));
+        dense_check(opt.dense->answer);
+    }
     multiple = is_eloftr ? ELOFTR_MULTIPLE
                : is_roma ? ROMA_MULTIPLE
                          : DISK_MULTIPLE;
@@ -649,6 +665,15 @@ int main(int argc, char *argv[])
     img2 = G_malloc(3 * (size_t)H * W * sizeof(float));
     v1 = G_malloc((size_t)H * W);
     v2 = G_malloc((size_t)H * W);
+    if (opt.dense->answer) {
+        if (!matcher.field)
+            G_fatal_error(_("<%s> gives no dense field"), matcher.name);
+        fdx = G_malloc((size_t)H * W * sizeof(float));
+        fdy = G_malloc((size_t)H * W * sizeof(float));
+        fce = G_malloc((size_t)H * W * sizeof(float));
+        dense_open(&dense_out, opt.dense->answer, &win, tile, overlap,
+                   src.valid);
+    }
 
     G_message(_("Matching %d tile(s) of %d x %d cells with <%s>..."), ntx * nty,
               tile, tile, matcher.name);
@@ -667,6 +692,9 @@ int main(int argc, char *argv[])
             w = win.cols - x0 < tile ? win.cols - x0 : tile;
             h = win.rows - y0 < tile ? win.rows - y0 : tile;
             t++;
+            /* Rows above this row of tiles are final. */
+            if (fdx && tx == 0)
+                dense_flush(&dense_out, y0);
 
             progress_begin(PG_TILE, 1);
             tile_input(&src, x0, y0, w, h, H, W, img1, v1);
@@ -691,6 +719,10 @@ int main(int argc, char *argv[])
             nraw += nm;
             if (dump)
                 matcher.dump(&matcher, &mt, dump);
+            if (fdx) {
+                matcher.field(&matcher, &mt, fdx, fdy, fce);
+                dense_add(&dense_out, x0, y0, w, h, fdx, fdy, fce);
+            }
 
             for (i = 0; i < ml.n; i++) {
                 struct gcp g;
@@ -772,6 +804,15 @@ int main(int argc, char *argv[])
     G_free(ml.v);
 
     progress_begin(PG_WRITE, 1);
+    if (fdx) {
+        dense_close(&dense_out);
+        G_message(_("Dense shift written to <%s_dx>, <%s_dy>, "
+                    "<%s_certainty>"),
+                  opt.dense->answer, opt.dense->answer, opt.dense->answer);
+        G_free(fdx);
+        G_free(fdy);
+        G_free(fce);
+    }
     {
         int before = gl.n;
 

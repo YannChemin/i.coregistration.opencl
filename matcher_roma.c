@@ -94,6 +94,35 @@ static int roma_m_match(struct matcher *m, const struct matcher_tile *t,
     return n;
 }
 
+/* The dense warp: a shift wherever the image is valid, certainty 0 (and
+ * no shift) where the image is invalid or the warp lands on an invalid
+ * cell of the reference. */
+static void roma_m_field(struct matcher *m, const struct matcher_tile *t,
+                         float *dx, float *dy, float *cert)
+{
+    struct roma_state *s = m->state;
+    const float *c = s->net.cert, *flow = s->net.flow;
+    size_t hw = (size_t)t->H * t->W;
+    int x, y;
+
+    for (y = 0; y < t->h; y++)
+        for (x = 0; x < t->w; x++) {
+            size_t i = (size_t)y * t->W + x, o = (size_t)y * t->w + x;
+            double xr = (flow[i] + 1.0) * 0.5 * t->W - 0.5;
+            double yr = (flow[hw + i] + 1.0) * 0.5 * t->H - 0.5;
+
+            if ((t->valid1 && !t->valid1[o]) ||
+                !valid_at(t->valid2, t->h, t->w, xr, yr)) {
+                dx[o] = dy[o] = NAN;
+                cert[o] = 0.0f;
+                continue;
+            }
+            dx[o] = (float)(xr - x);
+            dy[o] = (float)(yr - y);
+            cert[o] = c[i];
+        }
+}
+
 /* The tile's geometry, for tests/reference_compare_roma.py (the network
  * writes its own dumps during run). */
 static void roma_m_dump(struct matcher *m, const struct matcher_tile *t,
@@ -138,5 +167,6 @@ void matcher_roma_create(struct matcher *m, struct ops *ops,
     m->run = roma_m_run;
     m->match = roma_m_match;
     m->dump = roma_m_dump;
+    m->field = roma_m_field;
     m->destroy = roma_m_destroy;
 }

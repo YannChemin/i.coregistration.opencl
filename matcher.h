@@ -56,6 +56,12 @@ struct matcher {
      * into folder dir (I_COREGISTRATION_OPENCL_DUMP), after match. */
     void (*dump)(struct matcher *m, const struct matcher_tile *t,
                  const char *dir);
+    /* Dense matchers only (NULL otherwise), after run: for each of the
+     * tile's h x w cells (rows of w), the shift to the reference in
+     * cells (dx along the columns, dy along the rows) and its certainty
+     * in 0..1, NAN shifts and certainty 0 where there is none. */
+    void (*field)(struct matcher *m, const struct matcher_tile *t, float *dx,
+                  float *dy, float *cert);
     void (*destroy)(struct matcher *m);
 };
 

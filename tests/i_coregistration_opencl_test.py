@@ -24,7 +24,7 @@ def test_group_must_hold_three_bands(session, tmp_path):
 
 
 def test_dry_run_needs_points(session, tmp_path):
-    """With -n and no points= nothing would be written."""
+    """With -n and neither points= nor dense= nothing would be written."""
     tools = Tools(session=session)
     dummy = tmp_path / "dummy.pth"
     dummy.write_bytes(b"not used")
@@ -224,7 +224,8 @@ def test_matchanything_recovers_known_shift(session, matchanything_weights, plat
 def test_roma_recovers_known_shift(session, roma_dir, platform):
     """RoMa (the default matcher): its dense warp, sampled where most
     certain, gives the known shift to a fraction of a cell, never
-    refined by correlation."""
+    refined by correlation; so do its dense rasters, blended over 2 x 2
+    tiles."""
     tools = Tools(session=session)
     tools.i_coregistration_opencl(
         group="img",
@@ -232,7 +233,8 @@ def test_roma_recovers_known_shift(session, roma_dir, platform):
         matcher="roma",
         weights_dir=roma_dir,
         points="gcp_roma",
-        tile_size=256,
+        dense="roma",
+        tile_size=160,
         platform=platform,
     )
     rows = gs.vector_db_select("gcp_roma", columns="dx,dy,refined", env=session.env)[
@@ -246,3 +248,19 @@ def test_roma_recovers_known_shift(session, roma_dir, platform):
     assert statistics.median(dy) == pytest.approx(-SHIFT_Y, abs=0.1)
     close = sum(math.hypot(x - SHIFT_X, y + SHIFT_Y) < 0.5 for x, y in zip(dx, dy))
     assert close >= 0.9 * len(dx)
+
+    # Dense rasters: east +SHIFT_X, north -SHIFT_Y where certain (about 40 %
+    # of this texture's cells; 28 % with one 256-cell tile).
+    tools.r_mapcalc(expression="roma_sure = if(roma_certainty >= 0.5, 1, null())")
+    sure = gs.parse_command("r.univar", map="roma_sure", flags="g", env=session.env)
+    region = gs.region(env=session.env)
+    assert int(sure["n"]) >= 0.3 * region["cells"]
+    for name, shift in (("dx", SHIFT_X), ("dy", -SHIFT_Y)):
+        tools.r_mapcalc(
+            expression=f"roma_err_{name} = if(roma_sure, abs(roma_{name} - {shift}))"
+        )
+        err = gs.parse_command(
+            "r.univar", map=f"roma_err_{name}", flags="ge", env=session.env
+        )
+        assert float(err["median"]) < 0.1
+        assert float(err["percentile_90"]) < 0.25

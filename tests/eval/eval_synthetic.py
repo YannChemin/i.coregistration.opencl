@@ -25,7 +25,11 @@ Metrics per scenario: control points, error to the true position in
 cells (median, 90th percentile), inlier ratios (error <= 1 and <= 2
 cells), coverage (128 x 128 blocks holding an inlier), matches on moved
 objects that pass (error > 2 cells), wall time and the module's own
-stage timing. Results go to <dir>/synthetic.json and synthetic.md, the
+stage timing. With --dense (matcher=roma), the dense rasters too: the
+share of cells of certainty >= 0.5 and >= 0.1, the error of their
+shifts (median, 90th percentile, moved objects apart) and the share of
+moved-object cells certain and wrong (error > 2 cells). Results go to
+<dir>/synthetic.json and synthetic.md, the
 control points with their true positions and errors (window cells) to
 <dir>/points_<scenario>.csv.
 Progress lines "k/n scenario" go to stdout. Not shipped with the module.
@@ -126,7 +130,7 @@ def radiometry(img, rng):
     return out
 
 
-def run_module(module, group, points, flags, options, env):
+def run_module(module, group, points, flags, options, env, dense=None):
     cmd = [
         module,
         f"group={group}",
@@ -136,6 +140,8 @@ def run_module(module, group, points, flags, options, env):
         "--overwrite",
         "--verbose",
     ]
+    if dense:
+        cmd.append(f"dense={dense}")
     if flags:
         cmd.append(f"-{flags}")
     cmd += options.split()
@@ -226,6 +232,33 @@ def score(xs, ys, xr, yr, u, v, objmask, n, merged, active, csv=None):
     }
 
 
+def score_dense(base, region, u, v, objmask):
+    """The dense rasters <base>_dx, _dy, _certainty against the field."""
+    dx = np.asarray(garray.array(f"{base}_dx", dtype=np.float64))
+    dy = np.asarray(garray.array(f"{base}_dy", dtype=np.float64))
+    cert = np.asarray(garray.array(f"{base}_certainty", dtype=np.float64))
+    err = np.hypot(dx / region["ewres"] - u, -dy / region["nsres"] - v)
+    obj = np.zeros(u.shape, bool)
+    if objmask is not None:
+        obj = ndimage.binary_dilation(objmask, iterations=OBJECT_MARGIN)
+    res = {}
+    for t, tag in ((0.5, "50"), (0.1, "10")):
+        sure = np.isfinite(err) & (np.nan_to_num(cert) >= t)
+        ground = err[sure & ~obj]
+        res[f"dense_share_{tag}"] = round(float(sure.mean()), 4)
+        res[f"dense_median_{tag}"] = (
+            round(float(np.median(ground)), 3) if ground.size else None
+        )
+        res[f"dense_p90_{tag}"] = (
+            round(float(np.percentile(ground, 90)), 3) if ground.size else None
+        )
+        if obj.any():
+            res[f"dense_object_leaks_{tag}"] = round(
+                float((sure & obj & (err > 2)).sum() / obj.sum()), 4
+            )
+    return res
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("reference")
@@ -237,6 +270,9 @@ def main():
         "--options", default="", help="more module options, e.g. estimator=magsac"
     )
     ap.add_argument("--tag", default="")
+    ap.add_argument(
+        "--dense", action="store_true", help="also write and score dense= rasters"
+    )
     ap.add_argument("--scenarios", default=",".join(SCENARIOS))
     ap.add_argument("--seed", type=int, default=20261014)
     args = ap.parse_args()
@@ -304,7 +340,13 @@ def main():
             quiet=True,
         )
         info = run_module(
-            args.module, f"img_{name}", f"gcp_{name}", args.flags, args.options, env
+            args.module,
+            f"img_{name}",
+            f"gcp_{name}",
+            args.flags,
+            args.options,
+            env,
+            f"dense_{name}" if args.dense else None,
         )
         xs, ys, xr, yr, merged, active = read_points(f"gcp_{name}", region)
         res = score(
@@ -321,6 +363,8 @@ def main():
             out / f"points_{name}.csv",
         )
         res.update(info)
+        if args.dense:
+            res.update(score_dense(f"dense_{name}", region, u, v, objmask))
         res["params"] = params
         results["scenarios"][name] = res
         print(
@@ -344,6 +388,12 @@ def main():
         "match_s",
         "tiles",
     ]
+    if args.dense:
+        cols += [
+            f"dense_{m}_{t}"
+            for t in ("50", "10")
+            for m in ("share", "median", "p90", "object_leaks")
+        ]
     lines = [
         f"# Synthetic pairs ({args.tag}, {n} x {n} cells of {results['reference']}, flags -{args.flags} {args.options})",
         "",
