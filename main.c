@@ -259,7 +259,7 @@ int main(int argc, char *argv[])
     opt.matcher->type = TYPE_STRING;
     opt.matcher->options =
         "disk,eloftr,matchanything,roma,roma_v2ref,matchanything_roma";
-    opt.matcher->answer = "roma";
+    opt.matcher->answer = "roma_v2ref";
     opt.matcher->description = _("Matching method");
     G_asprintf((char **)&opt.matcher->descriptions,
                "disk;%s;eloftr;%s;matchanything;%s;roma;%s;roma_v2ref;%s;"

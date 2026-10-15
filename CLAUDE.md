@@ -94,7 +94,8 @@ state, how to build, test and run, and what is still to be decided.
   (public, created at the user's request; downloaded by the module into
   `$ROMAV2_MODELS_DIR` or `~/models/romav2`). Parity
   `tests/reference_compare_roma2.py` (venv_kornia, not `-I`): 1.4e-3
-  cell. Best or equal on every Tucson test, 20 % faster than roma.
+  cell. Best or equal on every Tucson test, 20 % faster than roma; the
+  default since 2026-10-15 (user's decision).
   `I_COREGISTRATION_OPENCL_ROMAV2=<folder>` enables its pytest.
 
 ## Next step
@@ -107,7 +108,7 @@ error message give the URL, the licence and the path. Next: RoMa v2
 `~/models/romav2` on both machines). The user does not accept the DINOv3
 License (California law, Meta may change the terms): never load the
 `f.*` tensors (DINOv3) of that file; done as `matcher=roma_v2ref`.
-Open: whether it becomes the default (the user's call); then phase 5.
+Next: phase 5.
 
 ## Build, test, run
 

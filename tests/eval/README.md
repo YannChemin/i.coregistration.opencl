@@ -556,3 +556,6 @@ Better or equal everywhere, 20 % faster; fewer control points on the
 basemaps (its overlap probability falls below 0.5 more often between
 dates), more everywhere else. The cross-modal east shift is unchanged
 (-3.0 to -3.9 m).
+
+Default since 2026-10-15: `matcher=roma_v2ref` (the user's decision on
+this evaluation); `matcher=roma` gives the previous default.

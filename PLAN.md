@@ -285,7 +285,8 @@ available. Defaults unchanged.
 
 Sources: `~/dev/RoMaV2` (MIT) with a DINOv3 ViT-L/16 backbone whose code
 and weights are under Meta's DINOv3 License Agreement (gated download).
-Decision needed before starting: accept the DINOv3 licence for personal
+Decided 2026-10-15: no DINOv3 (see the status below). Original note:
+accept the DINOv3 licence for personal
 research (weights read from a user-given path, never downloaded or
 shipped by the module, backbone written from the architecture described
 in the DINOv3 paper rather than translated from Meta's code), or start
@@ -347,7 +348,7 @@ network, no input normalization; never downloaded, PRL), less accurate
 than RoMa's own here. RoMa v2: DINOv3 License not accepted by the user;
 RoMa v1's coarse warp into RoMa v2's refiners (MIT, VGG features only)
 instead: `matcher=roma_v2ref`, better or equal to roma on every test,
-20 % faster (tests/eval/README.md).
+20 % faster (tests/eval/README.md); the default since 2026-10-15.
 
 ## Phase 5. Dense match summarization
 
@@ -403,4 +404,6 @@ Eval: same model and accuracy as with all matches, 10-100 times faster.
 5. Defaults follow the evaluation for long-term addon use: after phase
    4, `matcher=roma` (RoMa's positions never refined), decided under
    that standing rule while the user was away (2026-10-14 night);
-   `matcher=eloftr` is the previous default.
+   `matcher=eloftr` is the previous default. 2026-10-15: the user chose
+   `matcher=roma_v2ref` (RoMa with RoMa v2's refiners, no DINOv3: the
+   user rejects the DINOv3 License).

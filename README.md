@@ -1,8 +1,9 @@
 # i.coregistration.opencl
 
 GRASS GIS addon that finds control points between an imagery group and a
-reference group with Efficient LoFTR (default, or with MatchAnything's
-cross-modal weights), RoMa's dense warp, or DISK local features
+reference group with RoMa's dense warp (default: refined by RoMa v2's
+refiners, without DINOv3), Efficient LoFTR (or with MatchAnything's
+cross-modal weights), or DISK local features
 matched and filtered by AdaLAM, on an OpenCL device, refines them to a
 fraction of a cell, and writes them as the group's control points for
 *i.rectify* (thin plate spline with `-t`) or *v.rectify*. It grew from a
@@ -67,11 +68,11 @@ headers and ICD loader, libcurl (download of the weights) and OpenMP.
   <https://huggingface.co/zju-community/matchanything_eloftr>, looked
   for in `$MATCHANYTHING_MODELS_DIR` or `~/models/matchanything`
   (Apache 2.0 on the model card; licence note in the manual).
-- `matcher=roma` (default): `roma_outdoor.pth` of
+- `matcher=roma`: `roma_outdoor.pth` of
   <https://github.com/Parskatt/RoMa> (MIT) and DINOv2's
   `dinov2_vitl14_pretrain.pth` (Apache 2.0, 1.1 GiB), both looked for in
   `$ROMA_MODELS_DIR` or `~/models/roma`.
-- `matcher=roma_v2ref`: RoMa's weights as above and RoMa v2's refiners
+- `matcher=roma_v2ref` (default): RoMa's weights as above and RoMa v2's refiners
   without DINOv3, `romav2_refiners.pt` of
   <https://github.com/YannChemin/romav2-refiners> (MIT), looked for in
   `$ROMAV2_MODELS_DIR` or `~/models/romav2`.

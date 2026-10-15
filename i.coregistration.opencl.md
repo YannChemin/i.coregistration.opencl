@@ -10,9 +10,10 @@ fitted per tile makes the remaining outliers (objects that moved
 between the images, mismatches) inactive control points. Neither
 Python nor PyTorch is needed at run time.
 
-The matching method is chosen with **matcher**: RoMa (`roma`, the
-default), a dense matcher that estimates where every cell of the image
-lies in the reference, with its certainty; Efficient LoFTR (`eloftr`), a
+The matching method is chosen with **matcher**: RoMa, a dense matcher
+that estimates where every cell of the image lies in the reference,
+with its certainty, followed by the finer refiners of RoMa v2
+(`roma_v2ref`, the default) or alone (`roma`); Efficient LoFTR (`eloftr`), a
 detector-free matcher that finds matches over
 the whole image, texture-poor areas included; DISK keypoints matched
 by nearest neighbour and filtered with AdaLAM (`disk`), which keeps the
@@ -26,7 +27,9 @@ the most accurate: errors of 0.03 to 0.08 cell on synthetic warps
 against 0.09 to 0.40 for Efficient LoFTR, the smallest leave-one-out
 residuals and loop closure on the basemaps, and the fewest outliers
 between the hyperspectral scene and the basemaps, for a little over twice
-the run time of Efficient LoFTR (see `tests/eval/README.md`). Efficient
+the run time of Efficient LoFTR (see `tests/eval/README.md`); RoMa v2's
+refiners made it as accurate or more on every test and about 20 %
+faster. Efficient
 LoFTR gave 13 to 18 times as many control points as DISK, over every
 part of the images, and smaller residuals.
 
@@ -224,8 +227,9 @@ infrared) and visible basemaps 3.2 to 3.7 m (4.7 to 7.4 m), with almost
 no control point made inactive by the robust estimation. It gives fewer
 control points than Efficient LoFTR (at most one per block) and only
 one match on moved objects passed the robust estimation (16 for
-Efficient LoFTR). It is the default matcher; Efficient LoFTR is about
-twice as fast for a looser fit.
+Efficient LoFTR). Followed by RoMa v2's refiners (`roma_v2ref`, below),
+it is the default matcher; Efficient LoFTR is about twice as fast for a
+looser fit.
 
 ### RoMa with RoMa v2's refiners
 
@@ -510,7 +514,9 @@ RoMa took about 7 seconds per 1024 x 1024 tile on the same GPU (25
 tiles in about 3 min 10 s), most of it in the matrix products of
 DINOv2, VGG19 and the refiners, and needs about 3.5 GiB of device
 memory by the sum of its buffers (its weights alone take 1.7 GiB). Reading its 1.5 GiB of weights takes
-a few seconds at the start of each run.
+a few seconds at the start of each run. With RoMa v2's refiners
+(`roma_v2ref`), a tile took about 5.5 seconds (25 tiles in about 2 min
+25 s).
 
 ### Debugging aids
 
