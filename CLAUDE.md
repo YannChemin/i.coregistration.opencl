@@ -99,7 +99,8 @@ state, how to build, test and run, and what is still to be decided.
   deviation (det(P)^(-1/4) of RoMa v2's precision) is reported as
   `points=` column `sd` and `dense=` raster `_sd`; calibration in
   tests/eval/README.md (ranks real residuals loosely, too large on
-  synthetic warps); not used by the module.
+  synthetic warps); used only by `max_sd=` (drop matches above it:
+  0.2 m on the basemaps improved loop closure p90 0.160 -> 0.131 m).
   `I_COREGISTRATION_OPENCL_ROMAV2=<folder>` enables its pytest.
 
 ## Next step

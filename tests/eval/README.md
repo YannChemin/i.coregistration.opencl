@@ -589,3 +589,30 @@ right and it ranks the points loosely but usefully. Choosing the
 block's cell by smallest sd (instead of highest certainty) gave the
 same accuracy with 15-21 % fewer points (`p4_v2r_picksd`): dropped.
 sd is reported, not used by the module.
+
+### max_sd= (2026-10-15)
+
+`max_sd=` drops `roma_v2ref` matches whose predicted sd exceeds it (map
+units), before the other filters. `eval_basemaps.py` now also reports
+`coverage32` (share of 32 x 32-cell blocks with a point). Tags
+`p5_{hs,swir}_sd_{none,2.5,1.5}`, `p5_bm_sd_{none,0.2,0.13}`:
+
+| data | max_sd | points | coverage32 | LOO1 p90 | LOO2 p90 | loop closure median, p90 |
+|---|---|---|---|---|---|---|
+| basemaps (0.5 m) | none | 129744-199843 | 0.68-0.85 | 0.234-0.313 | 0.224-0.316 | 0.062, 0.160 (248 blocks) |
+| basemaps | 0.2 | 110349-187418 | 0.58-0.81 | 0.208-0.247 | 0.202-0.224 | 0.057, 0.131 (242 blocks) |
+| basemaps | 0.13 | 47429-117082 | 0.26-0.53 | 0.187-0.216 | 0.177-0.188 | 0.045, 0.106 (103 blocks) |
+| true colour (11.3 m) | none | 5743-6103 | 0.986-0.991 | 2.958-3.188 | 2.428-2.828 | |
+| true colour | 2.5 | 5554-5949 | 0.979-0.984 | 2.877-3.100 | 2.292-2.744 | |
+| true colour | 1.5 | 1291-3743 | 0.43-0.76 | 2.775-3.152 | 1.839-2.377 | |
+| SWIR/NIR | none | 5171-5589 | 0.972-0.979 | 3.433-3.662 | 2.938-2.980 | |
+| SWIR/NIR | 2.5 | 4086-4983 | 0.85-0.91 | 3.130-3.380 | 2.636-2.821 | |
+| SWIR/NIR | 1.5 | 7-784 | 0.005-0.27 | | | |
+
+A threshold a little above the median sd (0.2 m here: 1.5 times the
+median, 0.4 cell) keeps most points and coverage and improves both the
+per-point residuals and the loop closure (the fair measure: it does not
+depend on which points are kept), and the robust stage then rejects far
+fewer points (inactive 290-2011 instead of 3157-4629). At or below the
+median, coverage collapses. The median shifts do not move. An option,
+not a default: its value depends on the data (map units).

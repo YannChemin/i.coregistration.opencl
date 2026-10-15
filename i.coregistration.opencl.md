@@ -340,6 +340,19 @@ the ground. **max_shift** drops matches whose shift exceeds that
 distance (in map units), and **tolerance** those whose shift differs
 from the median shift of their tile by more than that along either axis.
 
+With `matcher=roma_v2ref`, **max_sd** drops matches whose predicted
+standard deviation (`sd`, see Output) exceeds that value, in map units;
+under the thin plate spline of *i.rectify* every active control point
+bends the warp, so the least precise ones are best left out. Choose it
+a little above the median `sd` of a first run: on the Tucson basemaps
+(0.5 m cells, median `sd` 0.13 m), `max_sd=0.2` kept 84 to 94 % of the
+control points and lowered the 90th percentile of their leave-one-out
+residuals by 11 to 24 % and of the loop closure from 0.160 to 0.131 m;
+across modalities (11.3 m cells, median `sd` 1.4 to 2.2 m),
+`max_sd=2.5` kept 79 to 97 % for 3 to 9 % lower residuals. Values near
+or below the median lose too much coverage (at `max_sd=0.13`, a third to
+a half of the 16 m blocks of the basemaps were left without a point).
+
 DISK keypoints lie on cell centres, so its matches are only as precise
 as one cell. Efficient LoFTR refines its matches to a fraction of a
 cell, but on aerial basemaps its estimate leans towards whole cells
@@ -468,9 +481,8 @@ correlations 0.14 to 0.35); its median was close to the median residual
 (1.4 to 2.2 m against 1.2 to 1.6 m across modalities, 0.12 to 0.15 m
 against 0.10 to 0.12 m between basemaps). On synthetic warps, where the
 errors are a few hundredths of a cell, it was larger than the errors
-(0.08 to 0.15 cell) and did not rank them. It is reported, not used by
-the module: select or weight with it downstream, for instance with
-*v.extract* on `sd`.
+(0.08 to 0.15 cell) and did not rank them. The module uses it only through
+**max_sd** (see Filters and refinement).
 
 With the RoMa matchers, **dense** writes RoMa's warp over the whole
 region as raster maps (single precision):
