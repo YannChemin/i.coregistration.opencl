@@ -16,6 +16,8 @@
 #define ROMA_CLS_RES 64   /* Coarse warp classes: 64 x 64 anchors. */
 #define ROMA_SCALES 5     /* Refiners at 1/16, 1/8, 1/4, 1/2, 1/1. */
 #define ROMA_HIDDEN 8     /* Hidden blocks per refiner. */
+#define ROMA2_SCALES 3    /* RoMa v2's refiners at 1/4, 1/2, 1/1. */
+#define ROMA2_ANCHOR 512  /* Their displacement scale: side / 512. */
 
 /* One pre-norm transformer block (DINOv2's, or the coordinate
  * decoder's): LayerNorm, attention, LayerNorm, MLP; DINOv2's layer
@@ -27,9 +29,11 @@ struct roma_block {
 
 /* One ConvRefiner: block1 and ROMA_HIDDEN hidden blocks of a depthwise
  * 5 x 5 convolution with its BatchNorm folded, ReLU and a 1 x 1
- * convolution; out_conv to (dx, dy, certainty). */
+ * convolution; out_conv to (dx, dy, certainty), or for RoMa v2's to
+ * (dx, dy) and 4 confidence channels (nout 6). */
 struct roma_refiner {
     int scale, feat, emb, radius, cin; /* cin = 2 feat + emb + corr. */
+    int nout;
     cl_mem dw_w[ROMA_HIDDEN + 1], dw_b[ROMA_HIDDEN + 1];
     cl_mem pw_w[ROMA_HIDDEN + 1], pw_b[ROMA_HIDDEN + 1];
     cl_mem out_w, out_b, emb_w, emb_b;
@@ -63,7 +67,19 @@ struct roma_model {
     struct roma_block dec[ROMA_DEC_DEPTH];
     cl_mem to_out_w, to_out_b;
     struct roma_refiner ref[ROMA_SCALES];
+    /* With RoMa v2's refiners (roma_load_v2): RoMa's chain stops after
+     * 1/8 in the coarse pass, then RoMa v2's refiners run at 1/4 .. 1/1
+     * at ROMA_COARSE and again at the tile's size, from their own
+     * VGG19-BN (first three blocks, BatchNorm folded); each refiner's
+     * input projection (a linear layer) is applied to its features. */
+    int v2;
+    cl_mem vgg2_w[8], vgg2_b[8];
+    int vgg2_cin[8], vgg2_cout[8];
+    cl_mem proj2_w[ROMA2_SCALES], proj2_b[ROMA2_SCALES];
+    int proj2_in[ROMA2_SCALES];
+    struct roma_refiner ref2[ROMA2_SCALES];
     cl_kernel k_norm, k_cos, k_cls, k_warp, k_corr, k_disp, k_update, k_dw;
+    cl_kernel k_update2;
 
     /* Work buffers for tiles of H x W (multiples of ROMA_MULTIPLE). */
     int H, W, hm, wm;         /* hm x wm: the larger of the tile and the coarse
@@ -73,6 +89,8 @@ struct roma_model {
     cl_mem t_x, t_n, t_qkv, t_o, t_h, t_out, t_s;       /* Transformers. */
     cl_mem g_y[2], g_nx, g_ny, g_kyy, g_kxy, g_p, g_mu; /* GP. */
     cl_mem d_a, d_b, d_c, fl[2], ce[2], cert16, lowres;
+    cl_mem P2[ROMA2_SCALES][2]; /* RoMa v2's projected features. */
+    cl_mem cf[2]; /* RoMa v2's confidence (4, n): overlap logit, precision. */
     /* Last run, host side: flow (2, H, W) normalized to -1..1 in image
      * B, certainty (H, W) in 0..1, as RoMa's match() (attenuated by the
      * coarse certainty, zero where the warp leaves the image). */
@@ -87,6 +105,11 @@ struct roma_model {
  * tensor or shape mismatch. */
 void roma_load(struct roma_model *m, struct ops *ops, struct pth_file *pf,
                struct pth_file *dino);
+
+/* RoMa v2's refiners and their VGG19-BN (romav2_refiners.pt: the
+ * refiners.* and refiner_features.* tensors of RoMa v2's weights), after
+ * roma_load and before roma_alloc. */
+void roma_load_v2(struct roma_model *m, struct pth_file *pf);
 
 /* Work buffers for tiles of up to H x W cells. */
 void roma_alloc(struct roma_model *m, int H, int W);

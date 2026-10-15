@@ -193,10 +193,10 @@ roma_local_corr(__global const float *f1, __global const float *f2,
     }
 }
 
-/* Displacement input of a refiner: factor (warp - own cell centre),
+/* Displacement input of a refiner: (fx, fy) (warp - own cell centre),
  * (2, n) for an H x W grid. */
 __kernel void roma_disp(__global const float *flow, const int H, const int W,
-                        const float factor, __global float *out)
+                        const float fx, const float fy, __global float *out)
 {
     const int i = get_global_id(0), n = H * W;
     float gx, gy;
@@ -205,8 +205,8 @@ __kernel void roma_disp(__global const float *flow, const int H, const int W,
         return;
     gx = -1.0f + 1.0f / W + (i % W) * (2.0f - 2.0f / W) / (W - 1);
     gy = -1.0f + 1.0f / H + (i / W) * (2.0f - 2.0f / H) / (H - 1);
-    out[i] = factor * (flow[i] - gx);
-    out[n + i] = factor * (flow[n + i] - gy);
+    out[i] = fx * (flow[i] - gx);
+    out[n + i] = fy * (flow[n + i] - gy);
 }
 
 /* Warp and certainty update from the refiner output d (3, n): the
@@ -223,6 +223,32 @@ __kernel void roma_update(__global float *flow, __global float *cert,
     flow[i] += scale * (d[i] / (4.0f * Wf));
     flow[n + i] += scale * (d[n + i] / (4.0f * Hf));
     cert[i] += d[2 * n + i];
+}
+
+/* RoMa v2's update from the refiner output d (6, n) on a W x H grid:
+ * warp += (dx, dy) / (4 W, 4 H); confidence (4, n) += the overlap logit
+ * and the precision (p00, p10, p11) of the Cholesky factor (softplus
+ * diagonal, as torch's softplus, threshold 20). */
+float softplus20(const float x) { return x > 20.0f ? x : log1p(exp(x)); }
+
+__kernel void roma2_update(__global float *flow, __global float *conf,
+                           __global const float *d, const int n,
+                           const float W, const float H)
+{
+    const int i = get_global_id(0);
+    float l00, l10, l11;
+
+    if (i >= n)
+        return;
+    flow[i] += d[i] / (4.0f * W);
+    flow[n + i] += d[n + i] / (4.0f * H);
+    l00 = softplus20(d[3 * n + i]) + 1e-6f;
+    l10 = d[4 * n + i];
+    l11 = softplus20(d[5 * n + i]) + 1e-6f;
+    conf[i] += d[2 * n + i];
+    conf[n + i] += l00 * l00;
+    conf[2 * n + i] += l00 * l10;
+    conf[3 * n + i] += l10 * l10 + l11 * l11;
 }
 
 /* Depthwise 5 x 5 convolution, stride 1, zero padding 2, bias, ReLU
