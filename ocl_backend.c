@@ -27,6 +27,8 @@ static const char *kernel_sources[] = {
 #include "disk_kernels_cl.h"
     ,
 #include "eloftr_kernels_cl.h"
+    ,
+#include "roma_kernels_cl.h"
 };
 
 #define NSOURCES (sizeof(kernel_sources) / sizeof(kernel_sources[0]))

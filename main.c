@@ -33,10 +33,12 @@
 #include "matcher.h"
 #include "matcher_disk.h"
 #include "matcher_eloftr.h"
+#include "matcher_roma.h"
 #include "ocl_backend.h"
 #include "ops.h"
 #include "progress.h"
 #include "pth_loader.h"
+#include "roma.h"
 
 /* Published DISK weights (both 4,375,832 bytes). */
 #define DOWNLOAD_URL "https://raw.githubusercontent.com/cvlab-epfl/disk/master"
@@ -53,6 +55,23 @@
 #define MATCHANYTHING_URL                                                      \
     "https://huggingface.co/zju-community/matchanything_eloftr/resolve/"       \
     "main/model.safetensors"
+
+/* RoMa's outdoor weights (MIT) and DINOv2 ViT-L/14's (Apache 2.0), the
+ * URLs of RoMa's model zoo. */
+#define ROMA_URL                                                               \
+    "https://github.com/Parskatt/storage/releases/download/roma/"              \
+    "roma_outdoor.pth"
+#define ROMA_SIZE 445647516LL
+#define DINOV2_URL                                                             \
+    "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitl14/"                     \
+    "dinov2_vitl14_pretrain.pth"
+#define DINOV2_SIZE 1217586395LL
+#define DINOV2_FILE "dinov2_vitl14_pretrain.pth"
+
+/* RoMa's dense warp sampled into matches: one per block of cells, where
+ * the certainty reaches the threshold. */
+#define ROMA_SPACING 8
+#define ROMA_MIN_CERT 0.5f
 
 /* Refinement windows, in cells: correlation radius and search. */
 #define REFINE_RADIUS 7
@@ -77,6 +96,18 @@ static int file_exists(const char *path)
     struct stat st;
 
     return stat(path, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+/* Download url to path if path is missing (fatal with -o). */
+static void fetch_weights(const char *path, const char *url, long long size,
+                          const char *what, int offline)
+{
+    if (file_exists(path))
+        return;
+    if (offline)
+        G_fatal_error(_("Checkpoint <%s> not found and -o given"), path);
+    G_message(_("Downloading <%s> weights <%s>..."), what, url);
+    download_file(url, path, size);
 }
 
 /* Tile (x0, y0, w, h) of both images as DISK input: (3, H, W) floats in
@@ -137,15 +168,16 @@ int main(int argc, char *argv[])
     struct rgb_image src, ref;
     struct ocl_backend ocl;
     struct ops ops;
-    struct pth_file pf;
+    struct pth_file pf, pf_dino;
     struct matcher matcher;
     struct disk_matcher_config dcfg;
     struct adalam_config *cfg = &dcfg.adalam;
     struct match_list ml = {0, 0, NULL};
     struct gcp_list gl = {0, 0, NULL};
-    char *ckpt = NULL;
+    char *ckpt = NULL, *dino = NULL;
     int stretch = 0, tile, overlap, step, nfeat, ntx, nty, tx, ty, t = 0;
-    int nactive, i, is_eloftr, is_ma, npe;
+    int nactive, i, is_eloftr, is_ma, is_roma, npe, refine;
+    long long wsize;
     int H, W, multiple, nraw = 0, nshift = 0, ntol = 0, nref = 0;
     double lo = 0, hi = 100, max_shift = 0, tol = 0, threshold = 0;
     int est_kind, tile_type, region_type, nkept = 0, nfail = 0;
@@ -166,9 +198,9 @@ int main(int argc, char *argv[])
     G_add_keyword(_("GPU"));
     module->description =
         _("Finds control points between an imagery group and a reference "
-          "group with Efficient LoFTR or DISK and AdaLAM on an OpenCL device, "
-          "refines them to a fraction of a cell, and writes them to the group "
-          "for i.rectify.");
+          "group with RoMa, Efficient LoFTR or DISK and AdaLAM on an OpenCL "
+          "device, to a fraction of a cell, and writes them to the group for "
+          "i.rectify.");
 
     opt.group = G_define_standard_option(G_OPT_I_GROUP);
     opt.group->description =
@@ -201,17 +233,19 @@ int main(int argc, char *argv[])
     opt.matcher = G_define_option();
     opt.matcher->key = "matcher";
     opt.matcher->type = TYPE_STRING;
-    opt.matcher->options = "disk,eloftr,matchanything";
-    opt.matcher->answer = "eloftr";
+    opt.matcher->options = "disk,eloftr,matchanything,roma";
+    opt.matcher->answer = "roma";
     opt.matcher->description = _("Matching method");
     G_asprintf((char **)&opt.matcher->descriptions,
-               "disk;%s;eloftr;%s;matchanything;%s",
+               "disk;%s;eloftr;%s;matchanything;%s;roma;%s",
                _("DISK keypoints matched and filtered by AdaLAM, on whole "
                  "cells"),
                _("Efficient LoFTR: detector-free semi-dense matches to a "
                  "fraction of a cell"),
                _("Efficient LoFTR with MatchAnything's cross-modal "
-                 "weights"));
+                 "weights"),
+               _("RoMa: dense warp (DINOv2 and VGG features), sampled "
+                 "where most certain"));
     opt.matcher->guisection = _("Model");
 
     opt.checkpoint = G_define_standard_option(G_OPT_F_INPUT);
@@ -219,8 +253,9 @@ int main(int argc, char *argv[])
     opt.checkpoint->required = NO;
     opt.checkpoint->description =
         _("Weights of the matcher (DISK: depth-save.pth or "
-          "epipolar-save.pth; eloftr, matchanything: model.safetensors); "
-          "default: in weights_dir=, downloaded if missing)");
+          "epipolar-save.pth; eloftr, matchanything: model.safetensors; "
+          "roma: roma_outdoor.pth); default: in weights_dir=, downloaded "
+          "if missing");
     opt.checkpoint->guisection = _("Model");
 
     opt.weights_dir = G_define_standard_option(G_OPT_M_DIR);
@@ -229,7 +264,9 @@ int main(int argc, char *argv[])
     opt.weights_dir->description =
         _("Folder of the matcher's weights (default: $DISK_MODELS_DIR or "
           "~/models/disk, $ELOFTR_MODELS_DIR or ~/models/eloftr, "
-          "$MATCHANYTHING_MODELS_DIR or ~/models/matchanything)");
+          "$MATCHANYTHING_MODELS_DIR or ~/models/matchanything, "
+          "$ROMA_MODELS_DIR or ~/models/roma, which also holds DINOv2's "
+          "weights for roma)");
     opt.weights_dir->guisection = _("Model");
 
     opt.model = G_define_option();
@@ -410,7 +447,7 @@ int main(int argc, char *argv[])
     flag.raw->key = 'r';
     flag.raw->description =
         _("Keep the matched positions: no sub-cell refinement by normalized "
-          "cross-correlation");
+          "cross-correlation (roma: never refined)");
     flag.raw->guisection = _("Filter");
 
     /* Refinement became the default; -s is kept for existing scripts. */
@@ -453,7 +490,18 @@ int main(int argc, char *argv[])
     }
     is_ma = strcmp(opt.matcher->answer, "matchanything") == 0;
     is_eloftr = is_ma || strcmp(opt.matcher->answer, "eloftr") == 0;
-    multiple = is_eloftr ? ELOFTR_MULTIPLE : DISK_MULTIPLE;
+    is_roma = strcmp(opt.matcher->answer, "roma") == 0;
+    /* RoMa's warp is finer than the correlation refinement, which made
+     * its errors 3-4 times larger (tests/eval/README.md, phase 4). */
+    refine = !flag.raw->answer && !is_roma;
+    if (is_roma && flag.refine->answer)
+        G_warning(_("matcher=roma: its positions are not refined"));
+    multiple = is_eloftr ? ELOFTR_MULTIPLE
+               : is_roma ? ROMA_MULTIPLE
+                         : DISK_MULTIPLE;
+    wsize = is_eloftr ? ELOFTR_SIZE
+            : is_roma ? ROMA_SIZE + DINOV2_SIZE
+                      : CHECKPOINT_SIZE;
     tile = atoi(opt.tile_size->answer);
     tile = (tile + multiple - 1) / multiple * multiple;
     overlap = atoi(opt.tile_overlap->answer);
@@ -486,13 +534,8 @@ int main(int argc, char *argv[])
     if (cfg->area_ratio <= 0 || cfg->search_expansion <= 0)
         G_fatal_error(_("area_ratio= and search_expansion= must be positive"));
 
-    /* The checkpoint, before any long reading. */
-    if (opt.checkpoint->answer) {
-        ckpt = G_store(opt.checkpoint->answer);
-        if (!file_exists(ckpt))
-            G_fatal_error(_("Checkpoint <%s> not found"), ckpt);
-    }
-    else {
+    /* The weights, before any long reading. */
+    {
         char *dir, *url;
 
         if (opt.weights_dir->answer)
@@ -502,25 +545,42 @@ int main(int argc, char *argv[])
                                       "matchanything");
         else if (is_eloftr)
             dir = default_weights_dir("ELOFTR_MODELS_DIR", "eloftr");
+        else if (is_roma)
+            dir = default_weights_dir("ROMA_MODELS_DIR", "roma");
         else
             dir = default_weights_dir("DISK_MODELS_DIR", "disk");
-        if (is_eloftr) {
-            G_asprintf(&ckpt, "%s/model.safetensors", dir);
-            url = G_store(is_ma ? MATCHANYTHING_URL : ELOFTR_URL);
+        if (opt.checkpoint->answer) {
+            ckpt = G_store(opt.checkpoint->answer);
+            if (!file_exists(ckpt))
+                G_fatal_error(_("Checkpoint <%s> not found"), ckpt);
         }
         else {
-            G_asprintf(&ckpt, "%s/%s-save.pth", dir, opt.model->answer);
-            G_asprintf(&url, "%s/%s-save.pth", DOWNLOAD_URL, opt.model->answer);
+            if (is_eloftr) {
+                G_asprintf(&ckpt, "%s/model.safetensors", dir);
+                url = G_store(is_ma ? MATCHANYTHING_URL : ELOFTR_URL);
+            }
+            else if (is_roma) {
+                G_asprintf(&ckpt, "%s/roma_outdoor.pth", dir);
+                url = G_store(ROMA_URL);
+            }
+            else {
+                G_asprintf(&ckpt, "%s/%s-save.pth", dir, opt.model->answer);
+                G_asprintf(&url, "%s/%s-save.pth", DOWNLOAD_URL,
+                           opt.model->answer);
+            }
+            fetch_weights(ckpt, url,
+                          is_eloftr ? ELOFTR_SIZE
+                          : is_roma ? ROMA_SIZE
+                                    : CHECKPOINT_SIZE,
+                          opt.matcher->answer, flag.offline->answer);
+            G_free(url);
         }
-        if (!file_exists(ckpt)) {
-            if (flag.offline->answer)
-                G_fatal_error(_("Checkpoint <%s> not found and -o given"),
-                              ckpt);
-            G_message(_("Downloading <%s> weights <%s>..."),
-                      opt.matcher->answer, url);
-            download_file(url, ckpt, is_eloftr ? ELOFTR_SIZE : CHECKPOINT_SIZE);
+        /* RoMa's backbone: always from the weights folder. */
+        if (is_roma) {
+            G_asprintf(&dino, "%s/%s", dir, DINOV2_FILE);
+            fetch_weights(dino, DINOV2_URL, DINOV2_SIZE, "DINOv2",
+                          flag.offline->answer);
         }
-        G_free(url);
         G_free(dir);
     }
 
@@ -541,8 +601,7 @@ int main(int argc, char *argv[])
     ntx = win.cols <= tile ? 1 : 1 + (win.cols - tile + step - 1) / step;
     nty = win.rows <= tile ? 1 : 1 + (win.rows - tile + step - 1) / step;
     progress_plan(PG_READ, 2.0 * win.rows * win.cols / 1e6);
-    progress_plan(PG_LOAD,
-                  (is_eloftr ? ELOFTR_SIZE : CHECKPOINT_SIZE) / 1073741824.0);
+    progress_plan(PG_LOAD, wsize / 1073741824.0);
     progress_plan(PG_BUILD, 1);
     progress_plan(PG_TILE, ntx * nty);
     progress_plan(PG_MATCH, ntx * nty);
@@ -565,6 +624,14 @@ int main(int argc, char *argv[])
     npe = is_ma;
     if (is_eloftr)
         matcher_eloftr_create(&matcher, &ops, &pf, opt.matcher->answer, npe);
+    else if (is_roma) {
+        const char *thr = getenv("I_COREGISTRATION_OPENCL_ROMA_CERT");
+
+        pth_open(&pf_dino, dino);
+        matcher_roma_create(&matcher, &ops, &pf, &pf_dino, ROMA_SPACING,
+                            thr ? (float)atof(thr) : ROMA_MIN_CERT);
+        pth_close(&pf_dino);
+    }
     else
         matcher_disk_create(&matcher, &ops, &pf, &dcfg);
     pth_close(&pf);
@@ -674,7 +741,7 @@ int main(int argc, char *argv[])
                 G_free(ddx);
                 G_free(ddy);
             }
-            if (!flag.raw->answer)
+            if (refine)
                 for (i = first; i < gl.n; i++)
                     nref += gcp_refine(&gl.v[i], &src, &ref, REFINE_RADIUS,
                                        REFINE_SEARCH);

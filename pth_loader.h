@@ -8,7 +8,9 @@
 
 #define PTH_MAX_DIMS 8
 
-enum pth_dtype { PTH_F32, PTH_F16, PTH_BF16 };
+/* PTH_OTHER: integer or boolean tensors (BatchNorm's num_batches_tracked
+ * and the like), skipped when indexing the state_dict. */
+enum pth_dtype { PTH_F32, PTH_F16, PTH_BF16, PTH_OTHER };
 
 /* One tensor of a PyTorch state_dict, described by where its storage
  * lives inside the (uncompressed) zip archive and how it is strided

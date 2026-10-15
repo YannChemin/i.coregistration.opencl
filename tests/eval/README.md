@@ -367,3 +367,103 @@ Conclusions:
 - The NCC refinement still helps across modalities (LOO p90 6-7 m
   against 9-10 m with `-r`): it stays on by default.
 - Defaults unchanged: `matcher=eloftr`, refinement on.
+
+## Phase 4: RoMa v1 (2026-10-14)
+
+`matcher=roma`: RoMa's outdoor weights with DINOv2 ViT-L/14, coarse pass
+at 560 x 560, fine pass at the tile's size, warp sampled at the most
+certain cell of each 8 x 8 block when its certainty is at least 0.5.
+Parity with the authors' code (`tests/reference_compare_roma.py`, CPU,
+float32, native local correlation) on one Google/ESRI tile of 1024
+cells: DINOv2 tokens within 6e-6 relative, Gaussian process posterior
+6e-5, coarse warp within 1e-4 cell, final warp within 4.6e-4 cell (99 %
+within 1e-4), certainty within 3e-5. With random weights (all
+BatchNorm statistics randomized) the second pass agreed within 1.5e-4
+cell. Device stage about 7 s per 1024 tile on the WX 7100 after three
+optimizations (attention as two GEMMs around a softmax, the local
+correlation from whole-cell dot products, a tiled depthwise
+convolution: 10.1 s before, same results).
+
+Synthetic pairs (as phase 2, superansac), cells; `roma -r` is what the
+module now does for RoMa (its positions are never refined):
+
+| scenario | matcher | points | median error | p90 error | within 1 cell | object leaks | wall s |
+|---|---|---|---|---|---|---|---|
+| translation | eloftr (refined) | 67795 | 0.181 | 0.367 | 99.79 % | 0 | 31.1 |
+| translation | roma, refined | 84488 | 0.182 | 0.358 | 99.93 % | 0 | 69.0 |
+| translation | roma -r | 84531 | 0.051 | 0.087 | 100.00 % | 0 | 68.7 |
+| affine | eloftr (refined) | 71175 | 0.134 | 0.345 | 99.74 % | 0 | 30.3 |
+| affine | roma, refined | 81387 | 0.131 | 0.336 | 99.75 % | 0 | 69.6 |
+| affine | roma -r | 81610 | 0.032 | 0.069 | 100.00 % | 0 | 67.3 |
+| smooth | eloftr (refined) | 74729 | 0.127 | 0.31 | 99.86 % | 0 | 29.5 |
+| smooth | roma, refined | 76351 | 0.123 | 0.304 | 99.47 % | 0 | 68.4 |
+| smooth | roma -r | 76459 | 0.045 | 0.096 | 100.00 % | 0 | 66.8 |
+| objects | eloftr (refined) | 65848 | 0.089 | 0.296 | 99.54 % | 16 | 30.9 |
+| objects | roma, refined | 73099 | 0.082 | 0.264 | 99.79 % | 3 | 68.3 |
+| objects | roma -r | 75425 | 0.029 | 0.071 | 100.00 % | 1 | 66.7 |
+| radiometric | eloftr (refined) | 72958 | 0.4 | 0.762 | 95.55 % | 0 | 30.8 |
+| radiometric | roma, refined | 71302 | 0.353 | 0.669 | 98.73 % | 0 | 68.1 |
+| radiometric | roma -r | 72728 | 0.084 | 0.176 | 100.00 % | 0 | 67.5 |
+
+Basemaps (4072-cell crops, 25 tiles of 1024), metres:
+
+| pair | matcher | active | inactive | LOO order 1 median, p90 | wall s |
+|---|---|---|---|---|---|
+| esri -> google | eloftr (refined) | 232210 | 24052 | 0.338, 0.868 | 83 |
+| esri -> google | roma, refined | 183902 | 2870 | 0.251, 0.597 | 189 |
+| esri -> google | roma -r | 187083 | 2770 | 0.136, 0.319 | 186 |
+| google -> bing | eloftr (refined) | 261708 | 19762 | 0.146, 0.589 | 86 |
+| google -> bing | roma, refined | 219350 | 5711 | 0.132, 0.428 | 189 |
+| google -> bing | roma -r | 220921 | 5629 | 0.104, 0.246 | 185 |
+| bing -> esri | eloftr (refined) | 221786 | 31935 | 0.327, 0.82 | 82 |
+| bing -> esri | roma, refined | 191954 | 5083 | 0.237, 0.587 | 188 |
+| bing -> esri | roma -r | 195453 | 5022 | 0.131, 0.299 | 184 |
+
+Loop closure (median, p90, metres): eloftr refined 0.066, 0.273; roma
+refined 0.058, 0.187; roma -r 0.075, 0.158. With tiles of 864 cells
+(RoMa's own fine resolution; 36 tiles, 24 % slower) the results are the
+same within a few millimetres (roma -r: LOO p90 0.313, 0.247, 0.297;
+closure 0.072, 0.153): the default tile size stays 1024.
+
+Cross-modal (as phase 3, one tile of 768 x 576, threshold 11.3 m),
+active points (inactive), LOO order 1 median and p90 in metres, for
+ESRI, Google and Bing:
+
+| composite | matcher | ESRI | Google | Bing |
+|---|---|---|---|---|
+| true colour | eloftr (refined) | 5914 (320) 2.08, 5.17 | 5904 (325) 1.99, 4.69 | 5924 (298) 2.07, 4.97 |
+| true colour | roma, refined | 5076 (37) 1.97, 4.64 | 5129 (28) 1.94, 4.39 | 5225 (40) 2.01, 4.60 |
+| true colour | roma -r | 5120 (0) 1.69, 3.46 | 5165 (1) 1.63, 3.23 | 5269 (1) 1.62, 3.23 |
+| SWIR/NIR | eloftr (refined) | 5678 (531) 2.49, 5.97 | 5289 (845) 2.44, 6.66 | 5003 (1111) 2.75, 7.39 |
+| SWIR/NIR | roma, refined | 4814 (88) 2.40, 5.49 | 4654 (123) 2.34, 5.57 | 4773 (169) 2.52, 6.19 |
+| SWIR/NIR | roma -r | 4901 (0) 1.78, 3.74 | 4780 (0) 1.81, 3.55 | 4948 (2) 1.89, 3.68 |
+
+The cross-modal median shifts differ by matcher: east -1.4 to -2.1 m
+with the refinement (and ELoFTR, DISK), -3.2 to -3.9 m with RoMa's own
+positions, north up to +2 m (SWIR/NIR). That is 0.15-0.3 of an 11.3 m
+cell; without ground truth on these pairs, which is closer is unknown
+(on the synthetic pairs RoMa's own positions had no such bias).
+
+Conclusions:
+
+- The translation is faithful to the authors' code at every stage.
+- RoMa's own warp is the most accurate of all matchers here: 0.03-0.08
+  cell median error on synthetic warps (3-5 times better than any
+  refined matcher), basemap LOO p90 0.25-0.32 m against 0.59-0.87 m for
+  Efficient LoFTR, and the loop closure p90 down from 0.273 to 0.158 m;
+  across modalities LOO p90 3.2-3.7 m against 4.7-7.4 m, with almost no
+  inactive points.
+- The NCC refinement makes RoMa worse (its errors 3-4 times larger):
+  RoMa's positions are never refined.
+- Moved objects: 1 leak (Efficient LoFTR 16, DISK 7).
+- Fewer points than Efficient LoFTR (at most one per 8 x 8 block: 15-25
+  % fewer on the basemaps, 10-15 % across modalities), far fewer
+  inactive ones.
+- Cost: about 7.4 s per 1024 tile in wall time (Efficient LoFTR about
+  3.3 s with the refinement), 1.5 GiB of weights (DINOv2 1.1 GiB) and about 3.5 GiB of
+  device memory.
+
+Default since 2026-10-14 (late): `matcher=roma`, chosen on this
+evaluation for long-term use; existing outputs change (control points
+and their shifts, the Tucson report's included) and runs take about
+2.2 times longer. `matcher=eloftr` gives the previous default.

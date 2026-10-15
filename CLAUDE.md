@@ -68,10 +68,22 @@ state, how to build, test and run, and what is still to be decided.
   `I_COREGISTRATION_OPENCL_MATCHANYTHING=<model.safetensors>` enables
   its pytest. The Space clone is `~/dev/MatchAnything_space`.
 
+- Phase 4 RoMa v1 done (2026-10-14 night): `matcher=roma`, the new
+  default (best on every eval, 2.2x ELoFTR's time; its positions are
+  never NCC-refined). Weights `roma_outdoor.pth` + `dinov2_vitl14_pretrain.pth`
+  in `~/models/roma` on both machines (with SHA256SUMS);
+  `I_COREGISTRATION_OPENCL_ROMA=<that folder>` enables its pytest.
+  Parity: `tests/reference_compare_roma.py <dump> ~/models/roma ~/dev/RoMa`
+  run with `~/dev/RS_coreg_LoFTR/venv_kornia/bin/python` (not `-I`: einops
+  is in the user site; loguru is stubbed). The pth loader now skips
+  integer tensors (BatchNorm's num_batches_tracked) and unwraps
+  `_rebuild_from_type_v2` (DINOv2's file).
+
 ## Next step
 
-PLAN.md phase 4, starting with RoMa v1 (the user's choice; decisions
-recorded at the end of PLAN.md).
+Open phase 4 items (PLAN.md 4.6 status): RoMa v2 / DINOv3 and
+MatchAnything's RoMa weights need the user's licence decisions; the
+dense dx/dy/certainty rasters (4.4); then phase 5.
 
 ## Build, test, run
 
@@ -86,6 +98,7 @@ recorded at the end of PLAN.md).
 - Tests: `I_COREGISTRATION_OPENCL_CHECKPOINT=~/models/disk/depth-save.pth
   I_COREGISTRATION_OPENCL_ELOFTR=~/models/eloftr/model.safetensors
   I_COREGISTRATION_OPENCL_MATCHANYTHING=~/models/matchanything/model.safetensors
+  I_COREGISTRATION_OPENCL_ROMA=~/models/roma
   grass --tmp-project XY --exec python3 -m pytest tests`. To test a
   build that is not installed (the server builds), also set
   `I_COREGISTRATION_OPENCL_BINDIR=<build>/bin`: the GRASS session puts the

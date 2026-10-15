@@ -4,26 +4,31 @@
 and a reference imagery group, and writes them as the group's control
 points for *i.rectify* (or *v.rectify*). The images are matched on an
 OpenCL device (GPU or CPU) by a learnt matcher, with weights read
-directly from their published files; the matches are refined to a
-fraction of a cell by normalized cross-correlation, and a robust model
+directly from their published files; the matches are found (or refined
+by normalized cross-correlation) to a fraction of a cell, and a robust model
 fitted per tile makes the remaining outliers (objects that moved
 between the images, mismatches) inactive control points. Neither
 Python nor PyTorch is needed at run time.
 
-The matching method is chosen with **matcher**: Efficient LoFTR
-(`eloftr`, the default), a detector-free matcher that finds matches over
-the whole image, texture-poor areas included, or DISK keypoints matched
+The matching method is chosen with **matcher**: RoMa (`roma`, the
+default), a dense matcher that estimates where every cell of the image
+lies in the reference, with its certainty; Efficient LoFTR (`eloftr`), a
+detector-free matcher that finds matches over
+the whole image, texture-poor areas included; DISK keypoints matched
 by nearest neighbour and filtered with AdaLAM (`disk`), which keeps the
 matches that agree with a local affine transformation around confident
 seed matches, or Efficient LoFTR with the weights of MatchAnything
 (`matchanything`), trained for matching across imaging modalities. All
-give the same outputs and go through the same filters, refinement and
-robust estimation. On the evaluation pairs
-(aerial basemaps of 0.5 m), Efficient LoFTR with the refinement gave 13
-to 18 times as many control points as DISK, over every part of the
-images, and smaller leave-one-out residuals; DISK did better between
-images of very different radiometry and left fewer matches on moved
-objects (see `tests/eval/README.md`).
+give the same outputs and go through the same filters and robust
+estimation. On the evaluation pairs (aerial basemaps of 0.5 m, synthetic
+warps of them, a hyperspectral scene of 11.3 m against them), RoMa was
+the most accurate: errors of 0.03 to 0.08 cell on synthetic warps
+against 0.09 to 0.40 for Efficient LoFTR, the smallest leave-one-out
+residuals and loop closure on the basemaps, and the fewest outliers
+between the hyperspectral scene and the basemaps, for a little over twice
+the run time of Efficient LoFTR (see `tests/eval/README.md`). Efficient
+LoFTR gave 13 to 18 times as many control points as DISK, over every
+part of the images, and smaller residuals.
 
 The module is a translation to C and OpenCL of the RS_coreg_LoFTR
 workflow (DISK features, AdaLAM matching, control points, thin plate
@@ -166,6 +171,61 @@ objects. Keep `eloftr` for images of the same kind, and try
 `matchanything` where the modalities differ more than here (thermal,
 SAR, maps).
 
+### RoMa
+
+RoMa (Edstedt et al., 2024) is a dense matcher: it estimates, for every
+cell of the image, where it lies in the reference (a warp) and how
+certain that is. With `matcher=roma`, both tiles (in colour, normalized
+with the ImageNet mean and deviation) are first resampled to 560 x 560
+cells (antialiased bicubic) for a coarse pass. Their coarse features are
+the patch tokens of the frozen DINOv2 ViT-L/14 vision transformer
+(Oquab et al., 2024), one per 14 x 14 cells, and their fine features
+those of VGG19 with batch normalization (Simonyan and Zisserman, 2015)
+at 1/8 down to full resolution. A Gaussian process regression over the
+reference's coarse features (as in DKM, Edstedt et al., 2023) gives each
+coarse cell of the image an embedding of its likely position, from which
+a transformer decoder chooses among 64 x 64 anchor positions. Refiners
+at 1/16, 1/8, 1/4, 1/2 and full resolution then correct the warp and its
+certainty, from the image's features, the reference's features sampled
+at the current warp and, down to 1/4, their correlation in a window
+around it. A second pass runs the refiners from 1/8 down again at the
+tile's own size, from the first pass's warp, as RoMa's reference code
+does when it upsamples its predictions; the certainty is then lowered
+where the coarse one was low, and set to zero where the warp leaves the
+reference.
+
+The warp is turned into matches by blocks of 8 x 8 cells: in each block,
+the cell of highest certainty, when that certainty is at least 0.5. The
+`dist` of a match is one minus its certainty. The matches then go
+through the same filters, refinement and robust estimation as the other
+matchers.
+
+The weights are the authors' outdoor ones (`roma_outdoor.pth`, MIT
+License, 425 MiB) and DINOv2's (`dinov2_vitl14_pretrain.pth`, Apache
+License 2.0, 1.1 GiB). Without **checkpoint**, RoMa's are looked for in
+**weights_dir** (by default `$ROMA_MODELS_DIR`, or `~/models/roma`);
+DINOv2's are always looked for there. Both are downloaded when missing,
+unless **-o** is given. Tile sides are rounded up to multiples of 8
+cells. Everything runs in single precision (the authors' code uses half
+precision on GPUs), the batch normalizations and DINOv2's layer scales
+folded into the weights when they are read. With random weights, the
+warp agreed with the authors' code within 1e-4 cell in the second pass,
+and within 1e-3 cell for 99 % of the cells of the first pass (see
+`tests/reference_compare_roma.py`).
+
+On the Tucson evaluation, RoMa's own positions were the most accurate
+of all matchers: median errors of 0.03 to 0.08 cell on synthetic warps
+of an aerial basemap (Efficient LoFTR with the refinement: 0.09 to
+0.40), a 90th percentile of the leave-one-out residuals of 0.25 to 0.32
+m between basemaps of 0.5 m (0.59 to 0.87 m), and between a
+hyperspectral scene of 11.3 m (true colour, or short-wave and near
+infrared) and visible basemaps 3.2 to 3.7 m (4.7 to 7.4 m), with almost
+no control point made inactive by the robust estimation. It gives fewer
+control points than Efficient LoFTR (at most one per block) and only
+one match on moved objects passed the robust estimation (16 for
+Efficient LoFTR). It is the default matcher; Efficient LoFTR is about
+twice as fast for a looser fit.
+
 ### Filters and refinement
 
 Images of different dates show objects that moved: a vehicle, an
@@ -186,7 +246,9 @@ windows shifted by up to two cells, and the peak is fitted by a parabola
 along each axis. Matches whose peak lies on the edge of the search area,
 or whose windows are flat or meet NULL cells, keep their whole-cell
 position. **-s**, which asked for this refinement before it became the
-default, is deprecated.
+default, is deprecated. RoMa's positions are never refined: its warp is
+finer than the correlation, which made its errors three to four times
+larger on the synthetic warps.
 
 Matches sharing a reference cell (found in two overlapping tiles, or by
 two keypoints) are merged into one control point, at the mean of their
@@ -319,6 +381,12 @@ GPU, and its matching on the host is almost free (25 tiles in about
 points as DISK, spread over the whole tile. It needs about 2 GiB of
 device memory for 1024-cell tiles.
 
+RoMa took about 7 seconds per 1024 x 1024 tile on the same GPU (25
+tiles in about 3 min 10 s), most of it in the matrix products of
+DINOv2, VGG19 and the refiners, and needs about 3.5 GiB of device
+memory by the sum of its buffers (its weights alone take 1.7 GiB). Reading its 1.5 GiB of weights takes
+a few seconds at the start of each run.
+
 ### Debugging aids
 
 With the environment variable `I_COREGISTRATION_OPENCL_DUMP` set to a
@@ -329,7 +397,11 @@ environment with PyTorch. With `eloftr` and `matchanything`, the grey
 inputs, the backbone,
 transformer and fine features and the matches are written, and
 `tests/reference_compare_eloftr.py` compares them stage by stage with
-*transformers*. With `I_COREGISTRATION_OPENCL_PROFILE` set,
+*transformers*. With `roma`, the normalized inputs of both passes, the
+DINOv2 tokens, the Gaussian process posterior, the coarse warp and the
+warp and certainty after every refiner are written, and
+`tests/reference_compare_roma.py` compares them with the authors' code.
+With `I_COREGISTRATION_OPENCL_PROFILE` set,
 every OpenCL kernel is timed and the totals per kernel are reported at
 the end (this slows the run down).
 
@@ -350,6 +422,17 @@ g.region raster=esri.1 -p
 i.coregistration.opencl group=google reference=esri points=gcp_google \
     max_shift=5 tolerance=2
 i.rectify -t group=google extension=_coreg method=linear -c
+```
+
+### Faster matching with Efficient LoFTR
+
+For a large mosaic where RoMa's run time (a little over twice) is too much,
+Efficient LoFTR with the correlation refinement is the next most
+accurate:
+
+```sh
+i.coregistration.opencl group=google reference=esri points=gcp_google \
+    matcher=eloftr max_shift=5 tolerance=2
 ```
 
 ### DISK keypoints
@@ -421,6 +504,17 @@ Dinic, E. A., 1970. Algorithm for solution of a problem of maximum flow
 in networks with power estimation. Soviet Mathematics Doklady 11,
 1277-1280.
 
+Edstedt, J., Athanasiadis, I., Wadenbäck, M., Felsberg, M., 2023. DKM:
+dense kernelized feature matching for geometry estimation. In:
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), 17765-17775.
+[doi:10.1109/CVPR52729.2023.01704](https://doi.org/10.1109/CVPR52729.2023.01704)
+
+Edstedt, J., Sun, Q., Bökman, G., Wadenbäck, M., Felsberg, M., 2024.
+RoMa: robust dense feature matching. In: Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition (CVPR),
+19790-19800.
+
 Fischler, M. A., Bolles, R. C., 1981. Random sample consensus: a
 paradigm for model fitting with applications to image analysis and
 automated cartography. Communications of the ACM 24 (6), 381-395.
@@ -433,10 +527,19 @@ Kolmogorov, V., Zabih, R., 2004. What energy functions can be minimized
 via graph cuts? IEEE Transactions on Pattern Analysis and Machine
 Intelligence 26 (2), 147-159.
 
+Oquab, M., Darcet, T., Moutakanni, T., Vo, H. V., Szafraniec, M.,
+Khalidov, V., Fernandez, P., Haziza, D., Massa, F., El-Nouby, A., et al.,
+2024. DINOv2: learning robust visual features without supervision.
+Transactions on Machine Learning Research.
+
 Riba, E., Mishkin, D., Ponsa, D., Rublee, E., Bradski, G., 2020.
 Kornia: an open source differentiable computer vision library for
 PyTorch. In: Proceedings of the IEEE/CVF Winter Conference on
 Applications of Computer Vision (WACV), 3674-3683.
+
+Simonyan, K., Zisserman, A., 2015. Very deep convolutional networks for
+large-scale image recognition. In: International Conference on Learning
+Representations (ICLR 2015).
 
 Sun, J., Shen, Z., Wang, Y., Bao, H., Zhou, X., 2021. LoFTR:
 detector-free local feature matching with transformers. In: Proceedings

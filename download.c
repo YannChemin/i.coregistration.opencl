@@ -60,19 +60,24 @@ static void make_parent(const char *path)
 
 struct progress {
     long long offset, total; /* Bytes already on disk, expected size. */
+    long last;               /* Last MiB reported (G_percent prints every
+                                call at 0). */
 };
 
 /* Report in MiB so that G_percent's long arithmetic never overflows. */
 static int on_progress(void *data, curl_off_t dltotal, curl_off_t dlnow,
                        curl_off_t ultotal, curl_off_t ulnow)
 {
-    const struct progress *p = data;
+    struct progress *p = data;
     long long total = p->total ? p->total : p->offset + dltotal;
+    long mib = (long)((p->offset + dlnow) >> 20);
 
     (void)ultotal;
     (void)ulnow;
-    if (total > 0)
-        G_percent((long)((p->offset + dlnow) >> 20), (long)(total >> 20), 2);
+    if (total > 0 && mib != p->last) {
+        G_percent(mib, (long)(total >> 20), 2);
+        p->last = mib;
+    }
     return 0;
 }
 
@@ -132,6 +137,7 @@ void download_file(const char *url, const char *path, long long size)
         G_fatal_error(_("Unable to initialize libcurl"));
     prog.offset = have;
     prog.total = size;
+    prog.last = -1;
     err[0] = '\0';
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);

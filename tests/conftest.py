@@ -6,7 +6,9 @@ which can be assumed on a test machine. They are skipped unless the
 weights are given: the DISK checkpoint in
 I_COREGISTRATION_OPENCL_CHECKPOINT, the Efficient LoFTR model.safetensors
 in I_COREGISTRATION_OPENCL_ELOFTR, MatchAnything's in
-I_COREGISTRATION_OPENCL_MATCHANYTHING.
+I_COREGISTRATION_OPENCL_MATCHANYTHING, the folder of RoMa's
+roma_outdoor.pth and dinov2_vitl14_pretrain.pth in
+I_COREGISTRATION_OPENCL_ROMA.
 I_COREGISTRATION_OPENCL_PLATFORM optionally selects the OpenCL platform
 (for Mesa rusticl, also export RUSTICL_ENABLE=radeonsi or the matching
 driver). I_COREGISTRATION_OPENCL_BINDIR, when set, is put first in the
@@ -96,6 +98,16 @@ def matchanything_weights():
     path = os.environ.get("I_COREGISTRATION_OPENCL_MATCHANYTHING")
     if not path or not Path(path).is_file():
         pytest.skip("set I_COREGISTRATION_OPENCL_MATCHANYTHING to model.safetensors")
+    return path
+
+
+@pytest.fixture
+def roma_dir():
+    """Folder of RoMa's and DINOv2's weights, or skip."""
+    path = os.environ.get("I_COREGISTRATION_OPENCL_ROMA")
+    files = ("roma_outdoor.pth", "dinov2_vitl14_pretrain.pth")
+    if not path or not all((Path(path) / f).is_file() for f in files):
+        pytest.skip("set I_COREGISTRATION_OPENCL_ROMA to the folder of " + " and ".join(files))
     return path
 
 

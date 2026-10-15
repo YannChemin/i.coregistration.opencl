@@ -18,6 +18,7 @@ def test_group_must_hold_three_bands(session, tmp_path):
 
     with pytest.raises(ToolError, match="exactly 3"):
         tools.i_coregistration_opencl(
+            matcher="disk",
             group="two", reference="ref", checkpoint=str(dummy), points="p", flags="n"
         )
 
@@ -81,6 +82,7 @@ def test_rejects_file_that_is_not_a_checkpoint(session, tmp_path):
 
     with pytest.raises(ToolError, match="checkpoint"):
         tools.i_coregistration_opencl(
+            matcher="disk",
             group="img", reference="ref", checkpoint=str(bad), points="p", flags="n"
         )
 
@@ -123,14 +125,14 @@ def test_recovers_known_shift(session, checkpoint, platform):
 
 @pytest.mark.parametrize("flags", ["", "r"])
 def test_eloftr_recovers_known_shift(session, eloftr_weights, platform, flags):
-    """Efficient LoFTR (the default matcher) gives the known shift to a
-    fraction of a cell, refined (the default) or from its own fine
-    matching alone (-r)."""
+    """Efficient LoFTR gives the known shift to a fraction of a cell,
+    refined (the default) or from its own fine matching alone (-r)."""
     tools = Tools(session=session)
     points = f"gcp_eloftr_{flags or 'refined'}"
     tools.i_coregistration_opencl(
         group="img",
         reference="ref",
+        matcher="eloftr",
         checkpoint=eloftr_weights,
         points=points,
         tile_size=256,
@@ -217,3 +219,30 @@ def test_matchanything_recovers_known_shift(session, matchanything_weights, plat
     dy = [float(r[1]) for r in rows.values()]
     assert statistics.median(dx) == pytest.approx(SHIFT_X, abs=0.1)
     assert statistics.median(dy) == pytest.approx(-SHIFT_Y, abs=0.1)
+
+
+def test_roma_recovers_known_shift(session, roma_dir, platform):
+    """RoMa (the default matcher): its dense warp, sampled where most
+    certain, gives the known shift to a fraction of a cell, never
+    refined by correlation."""
+    tools = Tools(session=session)
+    tools.i_coregistration_opencl(
+        group="img",
+        reference="ref",
+        matcher="roma",
+        weights_dir=roma_dir,
+        points="gcp_roma",
+        tile_size=256,
+        platform=platform,
+    )
+    rows = gs.vector_db_select("gcp_roma", columns="dx,dy,refined", env=session.env)[
+        "values"
+    ]
+    assert len(rows) >= 100
+    assert not any(int(r[2]) for r in rows.values())
+    dx = [float(r[0]) for r in rows.values()]
+    dy = [float(r[1]) for r in rows.values()]
+    assert statistics.median(dx) == pytest.approx(SHIFT_X, abs=0.1)
+    assert statistics.median(dy) == pytest.approx(-SHIFT_Y, abs=0.1)
+    close = sum(math.hypot(x - SHIFT_X, y + SHIFT_Y) < 0.5 for x, y in zip(dx, dy))
+    assert close >= 0.9 * len(dx)

@@ -324,6 +324,25 @@ tile well under 2 GiB per buffer.
 same correlation and refiner kernels), then MatchAnything's RoMa weights
 on it (same PRL treatment as Phase 3).
 
+Status (2026-10-14): RoMa v1 done first, as the user chose
+(`roma.c`, `roma_kernels.cl`, `matcher_roma.c`, `matcher=roma`):
+coarse pass at 560 x 560 and fine pass at the tile's size as the
+authors' match(), one direction (image to reference), float32, the
+Gaussian process solved on the host in double precision. Parity with
+the authors' code (`tests/reference_compare_roma.py`): final warp within
+4.6e-4 cell, certainty within 3e-5. The dense warp is sampled into
+matches (best cell of each 8 x 8 block, certainty >= 0.5) for the
+existing filters and robust stage; 4.4's dense `dx`/`dy`/certainty
+rasters are not written yet. Eval in `tests/eval/README.md`: the most
+accurate matcher on every test (synthetic 0.03-0.08 cell, basemap LOO
+p90 0.25-0.32 m, cross-modal 3.2-3.7 m), the NCC refinement makes it
+worse (so never applied to it), 2.2 times Efficient LoFTR's run time.
+Made the default (long-term addon rule). Open: RoMa v2 (DINOv3 licence
+decision), MatchAnything's RoMa weights (Google Drive only, Project
+Registration License: the user's decision, and their model code has a
+configurable backbone to check), dense rasters (4.4), the symmetric
+mode.
+
 ## Phase 5. Dense match summarization
 
 Source: Astermark, Heyden and Larsson (CVPR 2025), no code. For the
@@ -361,7 +380,7 @@ Eval: same model and accuracy as with all matches, 10-100 times faster.
 | v0.2 (done) | Phase 1: robust estimation stage | synthetic outlier tests, OpenCV USAC parity |
 | v0.3 (done) | Phase 2: Efficient LoFTR | PyTorch parity per stage, eval vs v0 |
 | v0.4 (done) | Phase 3: MatchAnything ELoFTR weights | cross-modal eval |
-| v0.5 | Phase 4: RoMa v1, then v2 (dense field) | PyTorch parity, dense eval |
+| v0.5 (v1 done) | Phase 4: RoMa v1, then v2 (dense field) | PyTorch parity, dense eval |
 | v0.6 | Phase 5: summarization | speed and accuracy vs full matches |
 
 ## Decisions from the user (2026-10-14)
@@ -375,3 +394,7 @@ Eval: same model and accuracy as with all matches, 10-100 times faster.
    in the manual. The user's own use is personal
    research (no registration).
 4. Order: robust stage first (done).
+5. Defaults follow the evaluation for long-term addon use: after phase
+   4, `matcher=roma` (RoMa's positions never refined), decided under
+   that standing rule while the user was away (2026-10-14 night);
+   `matcher=eloftr` is the previous default.

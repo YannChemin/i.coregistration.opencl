@@ -208,6 +208,7 @@ struct pv {
     int n, cap;
     struct pv **items; /* Tuple/list items; dict as k0, v0, k1, v1... */
     enum pth_dtype dtype;
+    int elsize; /* PV_STORAGE element size in bytes. */
     struct pv *storage;
     int ndim;
     long shape[PTH_MAX_DIMS], stride[PTH_MAX_DIMS];
@@ -399,6 +400,15 @@ static struct pv *reduce(struct pvm *m, struct pv *fn, struct pv *args)
             G_fatal_error(_("Unexpected parameter rebuild arguments"));
         return args->items[0];
     }
+    /* A tensor subclass (torch.Tensor itself in DINOv2's checkpoint):
+     * (rebuild function, type, its arguments, state); the type and state
+     * do not change the data. */
+    if (is_global(fn, "torch._tensor", "_rebuild_from_type_v2")) {
+        if (args->n < 3 || args->items[0]->t != PV_GLOBAL ||
+            args->items[2]->t != PV_TUPLE)
+            G_fatal_error(_("Unexpected tensor subclass rebuild arguments"));
+        return reduce(m, args->items[0], args->items[2]);
+    }
     if (is_global(fn, "collections", "OrderedDict"))
         return pv_new(m, PV_DICT);
 
@@ -418,17 +428,34 @@ static struct pv *persistent_load(struct pvm *m, struct pv *pid)
     type = pid->items[1];
     tn = type->s2;
     v = pv_new(m, PV_STORAGE);
-    if (strcmp(tn, "FloatStorage") == 0)
+    v->elsize = 2;
+    if (strcmp(tn, "FloatStorage") == 0) {
         v->dtype = PTH_F32;
+        v->elsize = 4;
+    }
     else if (strcmp(tn, "HalfStorage") == 0)
         v->dtype = PTH_F16;
     else if (strcmp(tn, "BFloat16Storage") == 0)
         v->dtype = PTH_BF16;
-    else
-        G_fatal_error(_("Unsupported tensor storage type <%s.%s> in "
-                        "checkpoint (float32, float16 and bfloat16 are "
-                        "supported)"),
-                      type->s, tn);
+    else {
+        /* Other types are indexed (the legacy format needs their size)
+         * but their tensors are left out of the state_dict. */
+        static const char *names[] = {
+            "DoubleStorage", "LongStorage", "IntStorage", "ShortStorage",
+            "CharStorage",   "ByteStorage", "BoolStorage"};
+        static const int sizes[] = {8, 8, 4, 2, 1, 1, 1};
+        int k;
+
+        v->dtype = PTH_OTHER;
+        v->elsize = 0;
+        for (k = 0; k < (int)(sizeof(sizes) / sizeof(sizes[0])); k++)
+            if (strcmp(tn, names[k]) == 0)
+                v->elsize = sizes[k];
+        if (!v->elsize)
+            G_fatal_error(_("Unsupported tensor storage type <%s.%s> in "
+                            "checkpoint"),
+                          type->s, tn);
+    }
     v->s = pid->items[2]->s;
     return v;
 }
@@ -887,7 +914,7 @@ static const struct pv *open_legacy(struct pth_file *pf, const char *path,
         for (k = 0; k < m->nall; k++)
             if (m->all[k]->t == PV_STORAGE &&
                 strcmp(m->all[k]->s, key->s) == 0) {
-                elsize = m->all[k]->dtype == PTH_F32 ? 4 : 2;
+                elsize = m->all[k]->elsize;
                 break;
             }
         if (!elsize)
@@ -1147,7 +1174,8 @@ void pth_open(struct pth_file *pf, const char *path)
 
     nt = 0;
     for (k = 1; k < sd->n; k += 2)
-        if (sd->items[k]->t == PV_TENSOR && sd->items[k - 1]->t == PV_STR)
+        if (sd->items[k]->t == PV_TENSOR && sd->items[k - 1]->t == PV_STR &&
+            sd->items[k]->storage->dtype != PTH_OTHER)
             nt++;
     pf->tensors = G_calloc(nt, sizeof(struct pth_tensor));
 
@@ -1157,7 +1185,8 @@ void pth_open(struct pth_file *pf, const char *path)
         long last;
         int d, e;
 
-        if (tv->t != PV_TENSOR || key->t != PV_STR)
+        if (tv->t != PV_TENSOR || key->t != PV_STR ||
+            tv->storage->dtype == PTH_OTHER)
             continue;
         t = &pf->tensors[pf->ntensors++];
         t->name = G_store(key->s);
