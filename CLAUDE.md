@@ -102,6 +102,14 @@ state, how to build, test and run, and what is still to be decided.
   synthetic warps); used only by `max_sd=` (drop matches above it:
   0.2 m on the basemaps improved loop closure p90 0.160 -> 0.131 m).
   `I_COREGISTRATION_OPENCL_ROMAV2=<folder>` enables its pytest.
+- `max_cycle=` (2026-10-15, RoMa matchers): the reverse warp too (twice the
+  time), matches whose round trip misses by more are dropped; `points=`
+  column `cycle`. Basemaps max_cycle=0.05-0.1 m: loop closure p90 0.160 ->
+  0.120-0.131 m with more coverage than max_sd=. Option, not default.
+  Swapped-role runs showed the AVIRIS 3-4 m east offset is in the data.
+  The Tucson report now reads `~/RSDATA/cropped_tucson_coreg.zarr` (the
+  cube translated by -3.745 m east, +1.220 m north to ESRI; report
+  backup in its `backup/pre_romacoreg_2026-10-15`).
 
 ## Next step
 

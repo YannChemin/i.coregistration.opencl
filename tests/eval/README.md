@@ -616,3 +616,61 @@ depend on which points are kept), and the robust stage then rejects far
 fewer points (inactive 290-2011 instead of 3157-4629). At or below the
 median, coverage collapses. The median shifts do not move. An option,
 not a default: its value depends on the data (map units).
+
+### max_cycle= and the swapped roles (2026-10-15)
+
+`max_cycle=` (RoMa matchers) also warps the reference onto the image and
+drops matches whose round trip (forward warp, then the reverse warp
+interpolated there) misses the image cell by more than it (map units;
+`points=` column `cycle`). `eval_basemaps.py` reports the cycle errors
+(`cycle_median`, `cycle_p90`, ranking of the LOO2 residuals) and has
+`--pairs back` (each reference to the first image: the roles swapped);
+`eval_synthetic.py` reports them against the true errors. Tags
+`p6_{hs,swir}_cyc_{stats,1.5,1.0}`, `p6_bm_cyc_{stats,0.1,0.05}`,
+`p6_{hs,swir}_back`, `p6_syn_cyc`, and `p6_*_both` (with `max_sd=`).
+
+Roles swapped (cube against each basemap, then each basemap against the
+cube, `roma_v2ref`, threshold=11.3), median shift east, north (m):
+
+| pairs | cube -> basemap | basemap -> cube |
+|---|---|---|
+| true colour, ESRI | -3.678, +1.024 | +3.811, -1.415 |
+| true colour, Google | -3.116, +1.006 | +3.195, -1.610 |
+| true colour, Bing | -3.213, +0.454 | +3.361, -1.006 |
+| SWIR/NIR, ESRI | -3.876, +1.640 | +3.978, -1.921 |
+| SWIR/NIR, Google | -3.010, +1.649 | +3.009, -1.876 |
+| SWIR/NIR, Bing | -3.570, +0.918 | +3.641, -1.184 |
+
+The shift reverses with the roles (to 0.0-0.15 m east, 0.23-0.60 m
+north): the 3-4 m east offset of the AVIRIS scene is in the data, not a
+bias of the matcher's direction.
+
+Cycle errors without filtering: median 0.034-0.035 m (0.07 cell), p90
+0.077-0.085 m on the basemaps; median 0.58-0.80 m (0.05-0.07 cell), p90
+1.27-1.94 m across modalities; on the synthetic warps 0.03-0.06 cell
+(true errors 0.02-0.09). They rank the residuals more weakly than `sd`
+(Spearman 0.07-0.24; synthetic 0.02-0.38), and moved objects come back
+as well as the ground (synthetic objects: median 0.056 cell).
+
+| data | filter | points | coverage32 | LOO1 p90 | LOO2 p90 | loop closure median, p90 |
+|---|---|---|---|---|---|---|
+| basemaps (0.5 m) | none | 129744-199843 | 0.68-0.85 | 0.234-0.313 | 0.224-0.316 | 0.062, 0.160 (248 blocks) |
+| basemaps | max_cycle=0.1 | 120656-189283 | 0.66-0.83 | 0.217-0.274 | 0.210-0.266 | 0.054, 0.131 (248) |
+| basemaps | max_cycle=0.05 | 91589-147524 | 0.60-0.78 | 0.205-0.246 | 0.199-0.227 | 0.052, 0.120 (248) |
+| basemaps | max_sd=0.2 | 110349-187418 | 0.58-0.81 | 0.208-0.247 | 0.202-0.224 | 0.057, 0.131 (242) |
+| basemaps | both (0.1, 0.2) | 107831-182028 | 0.57-0.80 | 0.204-0.242 | 0.198-0.219 | 0.054, 0.122 (242) |
+| true colour (11.3 m) | none | 5743-6103 | 0.986-0.991 | 2.958-3.188 | 2.428-2.828 | |
+| true colour | max_cycle=1.5 | 5214-5689 | 0.95-0.98 | 2.707-2.971 | 2.150-2.622 | |
+| true colour | max_cycle=1.0 | 4216-5001 | 0.93-0.96 | 2.688-2.930 | 2.120-2.586 | |
+| true colour | both (1.5, 2.5) | 5173-5659 | 0.95-0.98 | 2.694-2.964 | 2.136-2.625 | |
+| SWIR/NIR | none | 5171-5589 | 0.972-0.979 | 3.433-3.662 | 2.938-2.980 | |
+| SWIR/NIR | max_cycle=1.5 | 4335-4960 | 0.90-0.93 | 3.116-3.376 | 2.589-2.840 | |
+| SWIR/NIR | max_cycle=1.0 | 3324-4224 | 0.85-0.91 | 3.045-3.305 | 2.495-2.756 | |
+| SWIR/NIR | both (1.5, 2.5) | 3712-4663 | 0.84-0.88 | 3.073-3.343 | 2.539-2.803 | |
+
+A threshold near the cycle p90 (0.2 cell on the basemaps, 0.13 cell
+across modalities) matches `max_sd=` with more coverage; at 1.5 times
+the median (0.05 m) the loop closure p90 drops by a quarter with every
+block still evaluated, the best trade-off seen. Both filters together
+add little to either. The device time doubles (two warps per tile). An
+option, not a default.

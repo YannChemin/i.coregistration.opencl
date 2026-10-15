@@ -314,6 +314,25 @@ across modalities (11.3 m cells, median <code>sd</code> 1.4 to 2.2 m),
 <code>max_sd=2.5</code> kept 79 to 97 % for 3 to 9 % lower residuals. Values near
 or below the median lose too much coverage (at <code>max_sd=0.13</code>, a third to
 a half of the 16 m blocks of the basemaps were left without a point).</p>
+<p>With the RoMa matchers, <b>max_cycle</b> also warps the reference onto the
+image and follows each match there and back: the image cell's warp
+lands at a reference position, and the reverse warp there (interpolated
+bilinearly) brings it back near the cell. Matches that do not come back
+within <b>max_cycle</b> (map units; the <code>cycle</code> column, see Output) are
+dropped. It needs no calibration of the network's confidence and works
+with every RoMa matcher, but doubles the matching time. The cycle errors
+were small, a median of 0.05 to 0.07 cell on the Tucson basemaps and
+across modalities, with a long tail; a threshold near their 90th
+percentile, about 0.1 to 0.2 cell, worked best. On the basemaps
+<code>max_cycle=0.1</code> kept 93 to 95 % of the control points, almost all the
+coverage, and lowered the loop closure p90 from 0.160 to 0.131 m (as
+<code>max_sd=0.2</code>, with more coverage); <code>max_cycle=0.05</code> kept 71 to 74 % and
+reached 0.120 m, the closure still evaluated on 248 of the 256
+blocks of 128 m. Across modalities
+<code>max_cycle=1.5</code> (0.13 cell) kept 83 to 93 % of the points for 5 to 12 %
+lower residuals. A match on an object that moved between the dates comes
+back as well as one on the ground: this filter does not replace the
+robust estimation.</p>
 <p>DISK keypoints lie on cell centres, so its matches are only as precise
 as one cell. Efficient LoFTR refines its matches to a fraction of a
 cell, but on aerial basemaps its estimate leans towards whole cells
@@ -420,7 +439,10 @@ with <b>estimator</b>=<code>none</code>);</li>
 <li><code>inlier</code>: 1 for the active control points, 0 for the rejected ones;</li>
 <li><code>sd</code>: with <code>roma_v2ref</code>, the standard deviation of the reference
 position predicted by RoMa v2's refiners, in map units (NULL with
-the other matchers; see below).</li>
+the other matchers; see below);</li>
+<li><code>cycle</code>: with <b>max_cycle</b>, the distance in map units between the
+image position and where the reverse warp brings its reference
+position back (NULL without <b>max_cycle</b>).</li>
 </ul>
 <p>RoMa v2's refiners predict, for each cell, a 2 x 2 precision matrix P
 of its position in the reference; <code>sd</code> is det(P)^(-1/4) (the geometric
@@ -493,7 +515,7 @@ DINOv2, VGG19 and the refiners, and needs about 3.5 GiB of device
 memory by the sum of its buffers (its weights alone take 1.7 GiB). Reading its 1.5 GiB of weights takes
 a few seconds at the start of each run. With RoMa v2's refiners
 (<code>roma_v2ref</code>), a tile took about 5.5 seconds (25 tiles in about 2 min
-25 s).</p>
+25 s). <b>max_cycle</b> runs the network twice per tile.</p>
 <h3>Debugging aids</h3>
 <p>With the environment variable <code>I_COREGISTRATION_OPENCL_DUMP</code> set to a
 folder, each tile's DISK inputs, keypoints with their scores and
