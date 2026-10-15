@@ -353,6 +353,26 @@ across modalities (11.3 m cells, median `sd` 1.4 to 2.2 m),
 or below the median lose too much coverage (at `max_sd=0.13`, a third to
 a half of the 16 m blocks of the basemaps were left without a point).
 
+With the RoMa matchers, **max_cycle** also warps the reference onto the
+image and follows each match there and back: the image cell's warp
+lands at a reference position, and the reverse warp there (interpolated
+bilinearly) brings it back near the cell. Matches that do not come back
+within **max_cycle** (map units; the `cycle` column, see Output) are
+dropped. It needs no calibration of the network's confidence and works
+with every RoMa matcher, but doubles the matching time. The cycle errors
+were small, a median of 0.05 to 0.07 cell on the Tucson basemaps and
+across modalities, with a long tail; a threshold near their 90th
+percentile, about 0.1 to 0.2 cell, worked best. On the basemaps
+`max_cycle=0.1` kept 93 to 95 % of the control points, almost all the
+coverage, and lowered the loop closure p90 from 0.160 to 0.131 m (as
+`max_sd=0.2`, with more coverage); `max_cycle=0.05` kept 71 to 74 % and
+reached 0.120 m, the closure still evaluated on 248 of the 256
+blocks of 128 m. Across modalities
+`max_cycle=1.5` (0.13 cell) kept 83 to 93 % of the points for 5 to 12 %
+lower residuals. A match on an object that moved between the dates comes
+back as well as one on the ground: this filter does not replace the
+robust estimation.
+
 DISK keypoints lie on cell centres, so its matches are only as precise
 as one cell. Efficient LoFTR refines its matches to a fraction of a
 cell, but on aerial basemaps its estimate leans towards whole cells
@@ -467,7 +487,10 @@ positions, with the attribute columns:
 - `inlier`: 1 for the active control points, 0 for the rejected ones;
 - `sd`: with `roma_v2ref`, the standard deviation of the reference
   position predicted by RoMa v2's refiners, in map units (NULL with
-  the other matchers; see below).
+  the other matchers; see below);
+- `cycle`: with **max_cycle**, the distance in map units between the
+  image position and where the reverse warp brings its reference
+  position back (NULL without **max_cycle**).
 
 RoMa v2's refiners predict, for each cell, a 2 x 2 precision matrix P
 of its position in the reference; `sd` is det(P)^(-1/4) (the geometric
@@ -550,7 +573,7 @@ DINOv2, VGG19 and the refiners, and needs about 3.5 GiB of device
 memory by the sum of its buffers (its weights alone take 1.7 GiB). Reading its 1.5 GiB of weights takes
 a few seconds at the start of each run. With RoMa v2's refiners
 (`roma_v2ref`), a tile took about 5.5 seconds (25 tiles in about 2 min
-25 s).
+25 s). **max_cycle** runs the network twice per tile.
 
 ### Debugging aids
 
