@@ -492,3 +492,30 @@ objects the field follows the object (its own shift, not the
 background's): no filter applies to the rasters. Run time unchanged
 (68 s per scenario, 9 tiles of 1024). On the 256-cell pytest texture
 only about 40 % of the cells reach 0.5 (28 % with a single tile).
+
+### MatchAnything's RoMa weights (2026-10-15)
+
+`matcher=matchanything_roma`: RoMa v1's network with MatchAnything's
+retrained weights (`matchanything_roma.ckpt` from the authors' Google
+Drive `weights.zip`; same 603 tensors as `roma_outdoor.pth` under the
+prefix `matcher.model.`, 541 of them different), the same frozen DINOv2,
+inputs in 0..1 without the ImageNet normalization (as MatchAnything
+trains and tests). Parity on one Google/ESRI tile
+(`reference_compare_roma.py --weights`): final warp within 4.6e-4 cell,
+certainty within 4.2e-5. Never downloaded by the module (PRL, see the
+manual). Results (`p4_mar`, `p4_basemaps_mar`, `p4_hs_mar`,
+`p4_swir_mar`) against RoMa's own weights (`*_roma_r`):
+
+| test | matchanything_roma | roma |
+|---|---|---|
+| synthetic median / p90 (cells) | 0.08-0.13 / 0.16-0.25 | 0.03-0.08 / 0.07-0.18 |
+| basemaps LOO p90 (m) | 0.33-0.47 | 0.25-0.32 |
+| basemaps loop closure median, p90 (m) | 0.108, 0.180 | 0.075, 0.158 |
+| true colour LOO p90 (m), points | 3.5-3.8, 6564-6614 | 3.2-3.5, 5120-5269 |
+| SWIR/NIR LOO p90 (m), points | 4.2-4.5, 6423-6504 | 3.6-3.7, 4780-4948 |
+| dense moved-object cells certain and off (>= 0.5) | 33.8 % | 12.8 % |
+
+Less accurate everywhere, more points across modalities. The
+cross-modal median east shift is the same as RoMa's (-3.1 to -3.8 m),
+so that shift does not come from RoMa's own weights. Not a default;
+kept as an option for modalities further apart (thermal, SAR, maps).

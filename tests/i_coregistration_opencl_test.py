@@ -306,5 +306,8 @@ def test_matchanything_roma_recovers_known_shift(
     assert not any(int(r[2]) for r in rows.values())
     dx = [float(r[0]) for r in rows.values()]
     dy = [float(r[1]) for r in rows.values()]
-    assert statistics.median(dx) == pytest.approx(SHIFT_X, abs=0.1)
-    assert statistics.median(dy) == pytest.approx(-SHIFT_Y, abs=0.1)
+    # Less accurate than RoMa's own weights (0.08-0.13 cell median on the
+    # basemap synthetic pairs; 0.15 cell north on this smoothed noise),
+    # with the authors' code agreeing within 5e-4 cell.
+    assert statistics.median(dx) == pytest.approx(SHIFT_X, abs=0.25)
+    assert statistics.median(dy) == pytest.approx(-SHIFT_Y, abs=0.25)

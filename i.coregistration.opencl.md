@@ -238,7 +238,14 @@ within 5e-4 cell and the certainty within 5e-5
 (`tests/reference_compare_roma.py --weights`). The positions are never
 refined by correlation, and **dense** works as with `roma`.
 
-MAEVAL
+On the Tucson evaluation these weights were less accurate than RoMa's
+own, on every test: median errors of 0.08 to 0.13 cell on the synthetic
+warps (RoMa 0.03 to 0.08), a 90th percentile of the leave-one-out
+residuals of 0.33 to 0.47 m between basemaps (0.25 to 0.32 m), and of
+3.5 to 4.5 m between the hyperspectral scene and the basemaps (3.2 to
+3.7 m), although with about 30 % more control points there. Keep `roma`
+for these images; try `matchanything_roma` where the modalities differ
+more (thermal, SAR, maps), which is what it was trained for.
 
 These weights are **not downloaded by the module**, because of their
 licence. They are published only on the authors' Google Drive, as

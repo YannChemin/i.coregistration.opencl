@@ -56,23 +56,28 @@ headers and ICD loader, libcurl (download of the weights) and OpenMP.
 
 ## Weights
 
-- `matcher=eloftr` (default): `model.safetensors` of
+- `matcher=eloftr`: `model.safetensors` of
   <https://huggingface.co/zju-community/efficientloftr> (Apache 2.0),
   looked for in `$ELOFTR_MODELS_DIR` or `~/models/eloftr`.
 - `matcher=disk`: `depth-save.pth` (default) or `epipolar-save.pth` from
   <https://github.com/cvlab-epfl/disk>, looked for in `$DISK_MODELS_DIR`
   or `~/models/disk`.
-
 - `matcher=matchanything`: `model.safetensors` of
   <https://huggingface.co/zju-community/matchanything_eloftr>, looked
   for in `$MATCHANYTHING_MODELS_DIR` or `~/models/matchanything`
   (Apache 2.0 on the model card; licence note in the manual).
-- `matcher=roma`: `roma_outdoor.pth` of
+- `matcher=roma` (default): `roma_outdoor.pth` of
   <https://github.com/Parskatt/RoMa> (MIT) and DINOv2's
   `dinov2_vitl14_pretrain.pth` (Apache 2.0, 1.1 GiB), both looked for in
   `$ROMA_MODELS_DIR` or `~/models/roma`.
 
-All are downloaded when missing (`-o` to forbid).
+All the above are downloaded when missing (`-o` to forbid). Weights
+under more restrictive licences are opt-in and never downloaded by the
+module; the manual gives their URL, licence and place:
+
+- `matcher=matchanything_roma`: `matchanything_roma.ckpt` from the
+  authors' Google Drive `weights.zip`, in `$MATCHANYTHING_MODELS_DIR` or
+  `~/models/matchanything` (Project Registration License 1.0).
 
 ## Use
 
@@ -90,6 +95,7 @@ I_COREGISTRATION_OPENCL_CHECKPOINT=~/models/disk/depth-save.pth \
 I_COREGISTRATION_OPENCL_ELOFTR=~/models/eloftr/model.safetensors \
 I_COREGISTRATION_OPENCL_MATCHANYTHING=~/models/matchanything/model.safetensors \
 I_COREGISTRATION_OPENCL_ROMA=~/models/roma \
+I_COREGISTRATION_OPENCL_MATCHANYTHING_ROMA=~/models/matchanything/matchanything_roma.ckpt \
     grass --tmp-project XY --exec python3 -m pytest tests
 ```
 

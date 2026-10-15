@@ -341,7 +341,12 @@ worse (so never applied to it), 2.2 times Efficient LoFTR's run time.
 Made the default (long-term addon rule). Open: RoMa v2 (DINOv3 licence
 decision), MatchAnything's RoMa weights (Google Drive only, Project
 Registration License: the user's decision, and their model code has a
-configurable backbone to check), the symmetric mode.
+configurable backbone to check), the symmetric mode. 2026-10-15:
+MatchAnything's RoMa weights run as `matcher=matchanything_roma` (same
+network, no input normalization; never downloaded, PRL), less accurate
+than RoMa's own here. RoMa v2: DINOv3 License not accepted by the user;
+evaluating RoMa v1's coarse warp into RoMa v2's refiners (MIT, VGG
+features only) instead.
 
 ## Phase 5. Dense match summarization
 

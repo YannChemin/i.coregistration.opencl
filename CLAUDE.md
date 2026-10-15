@@ -82,6 +82,12 @@ state, how to build, test and run, and what is still to be decided.
   `<base>_dx`, `_dy` (map units) and `_certainty`, tiles blended
   (`dense.c`; matchers expose a `field` callback). Eval:
   `eval_synthetic.py --dense` (tests/eval/README.md).
+- `matcher=matchanything_roma` (2026-10-15): RoMa v1's code with
+  MatchAnything's weights (`~/models/matchanything/matchanything_roma.ckpt`,
+  never downloaded by the module, PRL; inputs not ImageNet-normalized;
+  DINOv2 from `~/models/roma`). Parity 4.6e-4 cell; less accurate than
+  `roma` on every Tucson test (tests/eval/README.md).
+  `I_COREGISTRATION_OPENCL_MATCHANYTHING_ROMA=<ckpt>` enables its pytest.
 
 ## Next step
 
@@ -89,12 +95,13 @@ Licence policy (user, 2026-10-15): the default run downloads its
 permissively licensed weights itself; weights under particular licences
 are opt-in matchers, never downloaded by the module: the manual and the
 error message give the URL, the licence and the path. Next: RoMa v2
-(`romav2.0.1.pt` from github.com/Parskatt/RoMaV2 release v2.0.1, DINOv3
-License; expected in `~/models/romav2`) and MatchAnything's RoMa
-(`matchanything_roma.ckpt` from the Google Drive `weights.zip` of the
-MatchAnything README; DINOv2-large backbone as RoMa v1; expected in
-`~/models/matchanything`), once the user has downloaded them; then
-phase 5.
+(`romav2.0.1.pt` from github.com/Parskatt/RoMaV2 release v2.0.1, in
+`~/models/romav2` on both machines). The user does not accept the DINOv3
+License (California law, Meta may change the terms): never load the
+`f.*` tensors (DINOv3) of that file. Path being evaluated: RoMa v1's
+coarse warp (DINOv2) into RoMa v2's refiners (`refiners.*`,
+`refiner_features.*`, MIT); prototype in the session scratchpad
+(hybrid.py). Then phase 5.
 
 ## Build, test, run
 
@@ -110,6 +117,7 @@ phase 5.
   I_COREGISTRATION_OPENCL_ELOFTR=~/models/eloftr/model.safetensors
   I_COREGISTRATION_OPENCL_MATCHANYTHING=~/models/matchanything/model.safetensors
   I_COREGISTRATION_OPENCL_ROMA=~/models/roma
+  I_COREGISTRATION_OPENCL_MATCHANYTHING_ROMA=~/models/matchanything/matchanything_roma.ckpt
   grass --tmp-project XY --exec python3 -m pytest tests`. To test a
   build that is not installed (the server builds), also set
   `I_COREGISTRATION_OPENCL_BINDIR=<build>/bin`: the GRASS session puts the

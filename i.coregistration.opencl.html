@@ -203,6 +203,59 @@ control points than Efficient LoFTR (at most one per block) and only
 one match on moved objects passed the robust estimation (16 for
 Efficient LoFTR). It is the default matcher; Efficient LoFTR is about
 twice as fast for a looser fit.</p>
+<h3>MatchAnything's RoMa</h3>
+<p>MatchAnything (see above) also trained RoMa on its cross-modal pairs.
+With <code>matcher=matchanything_roma</code>, the RoMa above runs those weights:
+the same network and the same frozen DINOv2, but the images are given
+in 0..1 without the ImageNet normalization, as the authors trained and
+test them. On a 1024-cell tile, the warp agreed with the authors' code
+within 5e-4 cell and the certainty within 5e-5
+(<code>tests/reference_compare_roma.py --weights</code>). The positions are never
+refined by correlation, and <b>dense</b> works as with <code>roma</code>.</p>
+<p>On the Tucson evaluation these weights were less accurate than RoMa's
+own, on every test: median errors of 0.08 to 0.13 cell on the synthetic
+warps (RoMa 0.03 to 0.08), a 90th percentile of the leave-one-out
+residuals of 0.33 to 0.47 m between basemaps (0.25 to 0.32 m), and of
+3.5 to 4.5 m between the hyperspectral scene and the basemaps (3.2 to
+3.7 m), although with about 30 % more control points there. Keep <code>roma</code>
+for these images; try <code>matchanything_roma</code> where the modalities differ
+more (thermal, SAR, maps), which is what it was trained for.</p>
+<p>These weights are <b>not downloaded by the module</b>, because of their
+licence. They are published only on the authors' Google Drive, as
+<code>weights.zip</code> (461 MiB, with the Efficient LoFTR weights too), linked
+from their repository's README:</p>
+<ul>
+<li>URL: <a href="https://drive.google.com/file/d/12L3g9-w8rR9K2L4rYaGaDJ7NqX1D713d/view">https://drive.google.com/file/d/12L3g9-w8rR9K2L4rYaGaDJ7NqX1D713d/view</a></li>
+<li>File to keep: <code>weights/matchanything_roma.ckpt</code> in the archive (425
+MiB, a PyTorch Lightning checkpoint).</li>
+<li>Place: <b>weights_dir</b>, by default <code>$MATCHANYTHING_MODELS_DIR</code> or
+<code>~/models/matchanything</code>, as <code>matchanything_roma.ckpt</code> (or give the
+file with <b>checkpoint</b>).</li>
+<li>DINOv2's weights are read from RoMa's folder (<code>$ROMA_MODELS_DIR</code> or
+<code>~/models/roma</code>), and downloaded there when missing (Apache License
+2.0, see RoMa).</li>
+</ul>
+<p>For example:</p>
+<div class="code"><pre>mkdir -p ~/models/matchanything
+cd $(mktemp -d)
+# Download weights.zip from the URL above into this folder, then:
+unzip weights.zip
+mv weights/matchanything_roma.ckpt ~/models/matchanything/</pre></div>
+<p>Licence: the archive states none of its own. The authors' repository
+(<a href="https://github.com/zju3dv/MatchAnything">https://github.com/zju3dv/MatchAnything</a>), which before held only a
+README, has been under their Project Registration License 1.0 since
+2026-09-15. Use for research, education, evaluation and personal
+purposes is free, without registration. Use by a company or other
+organization in any project (commercial or not, internal or not, from
+development to production) is free too but must be registered before
+it begins, through the Google form given in the licence (name of the
+organization, a contact, the project and its intended use); permission
+is then granted automatically, one registration per project. Copies
+must carry the licence, and those who receive them must register in
+turn. The licence names no governing law and has no clause on changing
+its terms. Read it in that repository
+before downloading, and register when it applies to you. This module
+contains none of the authors' code or weights.</p>
 <h3>Filters and refinement</h3>
 <p>Images of different dates show objects that moved: a vehicle, an
 aircraft or a ship gives matches that agree with each other but not with
